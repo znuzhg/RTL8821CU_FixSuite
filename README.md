@@ -42,6 +42,7 @@ Attach-RTL8821CU (usbipd ile adaptör bağlama için yardımcı)
 WSL terminalinde:
 
 # Derleme ve kurulum (gerçek çalıştırma)
+sudo bash update.sh (bu betik paketleri kurar ve günceller)
 sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
 
 # Örnek: sadece simülasyon
@@ -157,3 +158,4 @@ Author: Znuzhg Onyvxpv
 Version: 1.0.0
 Last Updated: 2025-10-29
 Compatibility: WSL2 (Ubuntu / Debian / Kali)
+
