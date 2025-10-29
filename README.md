@@ -35,7 +35,7 @@ Kernel imajı veya .wslconfig yapılandırmasını güncellemeye yardımcı olur
 Kullanılabilir Fonksiyonlar:
 
 powershell
-Kodu kopyala
+
 Set-WSLKernel -KernelImagePath <vmlinuz> [-UpdateConfig]
 Copy-Toolset
 Show-WSL-Restart-Steps
@@ -55,8 +55,6 @@ Parametre	Açıklama
 
 Örnek:
 
-bash
-Kodu kopyala
 sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
 🧠 Log Analizi (ai_helper.py)
 Derleme tamamlandıktan sonra, tüm çıktılar JSON olarak özetlenir:
@@ -67,7 +65,7 @@ python3 ai_helper.py summarize logs/latest/run.log
 Örnek çıktı:
 
 json
-Kodu kopyala
+
 {
   "timestamp": "2025-10-29T00:00:00Z",
   "errors": ["modpost: Undefined symbol"],
@@ -76,8 +74,7 @@ Kodu kopyala
   "applied_patches": ["patch_8821cu_power.diff"]
 }
 🧩 Proje Yapısı
-bash
-Kodu kopyala
+
 RTL8821CU_FixSuite/
 ├── setup.ps1               # Windows ortam hazırlayıcı
 ├── rtl8821cu_wsl_fix.sh    # WSL2 sürücü onarıcı
@@ -111,4 +108,5 @@ Yeni yamalar patch_*.diff veya patch_*.sh biçiminde eklenebilir.
 Author: Znuzhg Onyvxpv
 Version: 1.0.0
 Last Updated: 2025-10-29
+
 Compatibility: WSL2 (Ubuntu/Debian/Kali)
