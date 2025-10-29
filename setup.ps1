@@ -15,6 +15,7 @@ Amaç:
   - Python ve Git kontrolü
   - WSL tarafına dosyaların kopyalanması
   - Linux betiğinin otomatik çalıştırılması (isteğe bağlı)
+  - usbipd ile RTL8821CU Wi-Fi adaptörünü WSL2'ye bağlama
 
 Kullanım:
   powershell.exe -ExecutionPolicy Bypass -File setup.ps1
@@ -108,11 +109,38 @@ function Show-WSL-Restart-Steps {
     Write-Host "3) Launch your distro again"
 }
 
+function Attach-RTL8821CU {
+    <#
+      WSL2'ye bağlı RTL8821CU adaptörünü usbipd ile bağlar.
+      Bu işlem Windows tarafında yönetici haklarıyla yapılmalıdır.
+    #>
+    Write-Host "[INFO] Mevcut USB aygıtları listeleniyor..." -ForegroundColor Cyan
+    usbipd list
+
+    $busid = Read-Host "Bağlamak istediğiniz RTL8821CU adaptörünün BUSID değerini girin (örnek: 1-4)"
+    if (-not $busid) {
+        Write-Host "[WARN] BUSID girilmedi, işlem iptal edildi." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "[ACTION] Aygıt WSL2'ye bağlanıyor..." -ForegroundColor Cyan
+    usbipd attach --wsl --busid $busid
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] RTL8821CU adaptörü başarıyla WSL'e bağlandı." -ForegroundColor Green
+        Write-Host "Linux tarafında 'lsusb' komutuyla doğrulayabilirsiniz." -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[ERROR] usbipd bağlama işlemi başarısız oldu. Lütfen yönetici olarak tekrar deneyin." -ForegroundColor Red
+    }
+}
+
 if ($Help) {
     Write-Host "Usage examples:" -ForegroundColor Cyan
     Write-Host "  Set-WSLKernel -KernelImagePath C:\\path\\to\\vmlinuz -UpdateConfig"
     Write-Host "  Copy-Toolset"
     Write-Host "  Show-WSL-Restart-Steps"
+    Write-Host "  Attach-RTL8821CU"
     exit 0
 }
 
@@ -120,3 +148,4 @@ Write-Host "Loaded helper. Available functions:" -ForegroundColor Cyan
 Write-Host " - Set-WSLKernel -KernelImagePath <file> [-UpdateConfig]"
 Write-Host " - Copy-Toolset"
 Write-Host " - Show-WSL-Restart-Steps"
+Write-Host " - Attach-RTL8821CU (usbipd ile Wi-Fi adaptörünü WSL2'ye bağlar)"
