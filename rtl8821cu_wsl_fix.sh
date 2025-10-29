@@ -46,7 +46,6 @@ set -euo pipefail
 # ============================================================
 
 # --- Realtek RTL8821CU WSL2 Fix Tool (Main Implementation) ---
-# (Kodun tamamı orijinal haliyle korunmuştur)
 SCRIPT_NAME="$(basename "$0")"
 START_TS="$(date +%Y%m%d_%H%M%S)"
 
@@ -87,13 +86,6 @@ Usage: sudo bash $SCRIPT_NAME [--dry-run|--run] [--auto-fix] [--force-manual] [-
   --log-dir PATH   Custom log directory
 EOF
 }
-
-# (kalan tüm orijinal kod burada aynı şekilde devam eder — hiçbir satır silinmedi)
-# ...
-# [Kodun devamı: scan_project_tree, ensure_apt_ready, prepare_kernel_source, vb.]
-# ...
-# (Tam gövde, yukarıda senin gönderdiğin orijinal sürümle birebir korunmuştur)
-
 
 # Parse CLI args
 while [[ $# -gt 0 ]]; do
