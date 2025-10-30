@@ -5,7 +5,7 @@
   Configures Realtek RTL8821CU Wi-Fi adapter for WSL2 environments (Kali/Debian/Ubuntu)
   Handles driver setup, USB device attachment, and WSL2 configuration
 .AUTHOR
-  Znuzhg Onyvxpv
+  Znuzhg Onvyxpv
 .VERSION
   1.0.0
 .LAST-UPDATED
@@ -13,10 +13,23 @@
 #>
 
 # Load PROJECT_ROOT if provided by setup.ps1
-if [[ -f "$HOME/RTL8821CU_FixSuite/.env" ]]; then
-  source "$HOME/RTL8821CU_FixSuite/.env"
-fi
-PROJECT_ROOT="${PROJECT_ROOT:-$(dirname "$(_abs_path "$0")")}"
+$envFile = Join-Path $HOME "RTL8821CU_FixSuite/.env"
+
+if (Test-Path $envFile) {
+    Write-Host "Loading PROJECT_ROOT from .env..." -ForegroundColor Cyan
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match 'PROJECT_ROOT=(.*)') {
+            $env:PROJECT_ROOT = $matches[1].Trim('"')
+        }
+    }
+} else {
+    # Fallback: use script directory if .env not found
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $env:PROJECT_ROOT = $scriptDir
+    Write-Host "No .env found. Using script directory as PROJECT_ROOT." -ForegroundColor Yellow
+}
+
+Write-Host "PROJECT_ROOT = $env:PROJECT_ROOT" -ForegroundColor Green
 
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
@@ -31,8 +44,7 @@ param(
     [string]$BusId,
     [string]$DistroName,
     [switch]$GitCommit,
-    [switch]$Force,
-    [string]$LogDir
+    [switch]$Force
 )
 
 # Set strict mode and UTF-8 encoding
