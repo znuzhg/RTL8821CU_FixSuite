@@ -12,6 +12,12 @@
   2025-10-29
 #>
 
+# Load PROJECT_ROOT if provided by setup.ps1
+if [[ -f "$HOME/RTL8821CU_FixSuite/.env" ]]; then
+  source "$HOME/RTL8821CU_FixSuite/.env"
+fi
+PROJECT_ROOT="${PROJECT_ROOT:-$(dirname "$(_abs_path "$0")")}"
+
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
     [Parameter(Position=0)]
@@ -929,6 +935,27 @@ function Show-Help {
        Write-Log -Level 'INFO' -Message "Toolset copied via UNC" -Data @{ distro=$Distro; user=$linuxUser }
      }
    } catch {}
+# --- Ensure WSL sees PROJECT_ROOT ---
+if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+  $wslProjectRoot = try { (wsl.exe wslpath -a -- "$($script:ProjectRoot)" 2>$null).Trim() } catch { $null }
+} else {
+  $wslProjectRoot = $null
+}
+
+if (-not $wslProjectRoot) {
+  # Fallback to current windows user profile path if wslpath failed
+  $wslProjectRoot = "/mnt/c/Users/$env:USERNAME"
+  Write-Log -Level 'WARN' -Message "Fallback PROJECT_ROOT used: $wslProjectRoot"
+}
+
+$Env:PROJECT_ROOT = $wslProjectRoot
+Write-Log -Level 'INFO' -Message "PROJECT_ROOT for WSL set to $Env:PROJECT_ROOT"
+
+# Write a small .env inside the toolset so WSL-side scripts can source it
+$escaped = $Env:PROJECT_ROOT -replace '"','\"'
+$envCmd = "mkdir -p ~/RTL8821CU_FixSuite && printf 'export PROJECT_ROOT=\"%s\"\\n' '$escaped' > ~/RTL8821CU_FixSuite/.env && chmod 644 ~/RTL8821CU_FixSuite/.env"
+& wsl.exe -d $Distro -- sh -lc $envCmd | Out-Null
+Write-Log -Level 'INFO' -Message "Wrote .env to WSL toolset (PROJECT_ROOT exported)"
 
    if (-not $usedUNC) {
      foreach ($f in $files) {
