@@ -67,7 +67,14 @@ PY
 THIS_PATH="$(_abs_path "$0")"
 TARGET_DIR="$(dirname "$THIS_PATH")"
 
-PROJECT_ROOT="/mnt/c/Users/mahmu/OneDrive/Belgeler/Projeler_ai/CascadeProjects/windsurf-project"
+# Automatically detect project root if not provided via environment
+PROJECT_ROOT="${PROJECT_ROOT:-$(dirname "$(_abs_path "$0")")}"
+
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+  echo "[WARN] PROJECT_ROOT not found: $PROJECT_ROOT"
+  PROJECT_ROOT="$(dirname "$(_abs_path "$0")")"
+  echo "[INFO] Fallback PROJECT_ROOT=$PROJECT_ROOT"
+fi
 
 RUN_MODE=0
 AUTO_FIX=0
@@ -96,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     --force-manual) FORCE_MANUAL=1; shift ;;
     --no-network) NO_NETWORK=1; shift ;;
     --log-dir) USER_LOG_DIR="${2:-}"; shift 2 ;;
+    --project-root) PROJECT_ROOT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[WARN] Unknown option: $1"; shift ;;
   esac
