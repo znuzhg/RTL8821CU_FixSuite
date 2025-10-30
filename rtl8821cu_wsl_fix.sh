@@ -28,6 +28,7 @@ set -euo pipefail
 #    --force-manual   DKMS başarısızsa manuel derleme moduna geçer
 #    --no-network     Ağ erişimini kapatır (yerel kaynaklarla çalışır)
 #    --log-dir PATH   Log’ların özel dizine kaydedilmesini sağlar
+#    --project-root   Proje kök dizinini manuel belirtir (varsayılan: script’in bulunduğu klasör)
 #    -h, --help       Yardım mesajını gösterir
 #
 #  Örnekler:
