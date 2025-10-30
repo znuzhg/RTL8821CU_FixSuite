@@ -31,21 +31,29 @@ if (Test-Path $envFile) {
 
 Write-Host "PROJECT_ROOT = $env:PROJECT_ROOT" -ForegroundColor Green
 
-[CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
-param(
-    [Parameter(Position=0)]
-    [switch]$Help,
-    [Parameter()]
-    [switch]$DryRun,
-    [Parameter()]
-    [switch]$RunSmokeTest,
-    [Parameter()]
-    [switch]$AutoAttach,
-    [string]$BusId,
-    [string]$DistroName,
-    [switch]$GitCommit,
-    [switch]$Force
-)
+function Start-Setup {
+    [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
+    param(
+        [Parameter(Position=0)]
+        [switch]$Help,
+        [Parameter()]
+        [switch]$DryRun,
+        [Parameter()]
+        [switch]$RunSmokeTest,
+        [Parameter()]
+        [switch]$AutoAttach,
+        [string]$BusId,
+        [string]$DistroName,
+        [switch]$GitCommit,
+        [switch]$Force
+    )
+
+    Write-Host "Setup script started in mode: $($PSBoundParameters.Keys -join ', ')" -ForegroundColor Cyan
+}
+
+# Script giriş noktası
+Start-Setup @args
+
 
 # Set strict mode and UTF-8 encoding
 Set-StrictMode -Version Latest
