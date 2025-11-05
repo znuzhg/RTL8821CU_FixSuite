@@ -69,7 +69,7 @@ git, dkms, build-essential, bc, flex, bison, libssl-dev, libelf-dev, dwarves, pk
 
 Örnek hedef klasör (Windows):
 
-C:\Users\<kullanıcı>\OneDrive\Belgeler\Projeler_ai\CascadeProjects\windsurf-project\RTL8821CU_FixSuite
+C:\Users\<kullanıcı>\Downloads\RTL8821CU_FixSuite
 
 
 İçerikler:
@@ -329,3 +329,4 @@ sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
 lsusb
 ip link show
 sudo ip link set wlan0 up
+
