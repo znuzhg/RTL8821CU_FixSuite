@@ -87,7 +87,7 @@ RTL8821CU_FixSuite/
 
 WSL içindeki eşdeğeri:
 
-/mnt/c/Users/<kullanıcı>/OneDrive/Belgeler/Projeler_ai/CascadeProjects/windsurf-project/RTL8821CU_FixSuite
+/mnt/c/Users/<kullanıcı>/Downloads/RTL8821CU_FixSuite
 
 4 — Windows: setup.ps1 (adım adım, kolay)
 
@@ -329,4 +329,5 @@ sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
 lsusb
 ip link show
 sudo ip link set wlan0 up
+
 
