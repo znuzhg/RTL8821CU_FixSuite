@@ -12,6 +12,19 @@
   2025-10-29
 #>
 
+# Parametreler (script seviyesi)
+param(
+  [switch]$Help,
+  [switch]$DryRun,
+  [switch]$RunSmokeTest,
+  [switch]$AutoAttach,
+  [string]$BusId,
+  [string]$DistroName,
+  [switch]$GitCommit,
+  [switch]$Force,
+  [string]$LogDir
+)
+
 # Load PROJECT_ROOT if provided by setup.ps1
 $envFile = Join-Path $HOME "RTL8821CU_FixSuite/.env"
 
@@ -45,14 +58,28 @@ function Start-Setup {
         [string]$BusId,
         [string]$DistroName,
         [switch]$GitCommit,
-        [switch]$Force
+        [switch]$Force,
+        [string]$LogDir
     )
 
-    Write-Host "Setup script started in mode: $($PSBoundParameters.Keys -join ', ')" -ForegroundColor Cyan
+    Write-Host "Kurulum betiği başlatıldı: $($PSBoundParameters.Keys -join ', ')" -ForegroundColor Cyan
+    # Parametreleri script kapsamına yayıyoruz (ana akışta kullanılacak)
+    $script:Help = [bool]$Help
+    $script:DryRun = [bool]$DryRun
+    $script:RunSmokeTest = [bool]$RunSmokeTest
+    $script:AutoAttach = [bool]$AutoAttach
+    $script:BusId = $BusId
+    $script:DistroName = $DistroName
+    $script:GitCommit = [bool]$GitCommit
+    $script:Force = [bool]$Force
+    $script:LogDir = $LogDir
+    
+    # İmza/ExecutionPolicy rehberi (betiği engellemeden bilgilendir)
+    Write-Host "Not: İmza/ExecutionPolicy engeli için öneri → 'Set-ExecutionPolicy -Scope Process Bypass -Force' ve 'Unblock-File -Path .\setup.ps1'" -ForegroundColor Yellow
 }
 
 # Script giriş noktası
-Start-Setup @args
+Start-Setup -Help:$Help -DryRun:$DryRun -RunSmokeTest:$RunSmokeTest -AutoAttach:$AutoAttach -BusId $BusId -DistroName $DistroName -GitCommit:$GitCommit -Force:$Force -LogDir $LogDir
 
 
 # Set strict mode and UTF-8 encoding
@@ -60,8 +87,8 @@ Set-StrictMode -Version Latest
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Initialize script variables
-$script:ForceMode = $Force
-$script:LogDirParam = $LogDir
+$script:ForceMode = [bool](Get-Variable -Name Force -ValueOnly -ErrorAction SilentlyContinue)
+$script:LogDirParam = (Get-Variable -Name LogDir -ValueOnly -ErrorAction SilentlyContinue)
 $script:SuiteRoot = $PSScriptRoot
 $script:ProjectRoot = Split-Path -Parent $script:SuiteRoot
 $script:LogsRoot = if ($script:LogDirParam) { $script:LogDirParam } else { Join-Path $script:SuiteRoot 'logs' }
@@ -93,10 +120,16 @@ function Show-Help {
     Write-Host "  -Force          Skip confirmation prompts"
     Write-Host "  -LogDir         Custom log directory"
     Write-Host ""
+    Write-Host "İpucu: İmza/ExecutionPolicy engelini geçici olarak aşmak için:" -ForegroundColor Yellow
+    Write-Host "  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force" -ForegroundColor Yellow
+    Write-Host "  Unblock-File -Path .\\setup.ps1" -ForegroundColor Yellow
+    Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\setup.ps1 -RunSmokeTest -DistroName Ubuntu-22.04"
     Write-Host "  .\setup.ps1 -AutoAttach -BusId 1-5 -DistroName kali-linux -Force"
 }
+
+# Eski/ikinci Show-Help tanımı varsa kaldırıldı (tekrarı önlemek için)
 
 function Write-Log {
     [CmdletBinding()]
@@ -124,6 +157,30 @@ function Write-Log {
         'ERROR' { Write-Host $logEntry -ForegroundColor Red }
         'DEBUG' { Write-Host $logEntry -ForegroundColor Gray }
     }
+}
+
+# usbipd/usbpd algılama ve sürüm bilgisi
+function Test-Usbipd {
+    [CmdletBinding()]
+    param()
+    $result = [ordered]@{
+        Available = $false
+        Command   = $null
+        Version   = $null
+    }
+    $cmd = Get-Command usbipd -ErrorAction SilentlyContinue
+    if (-not $cmd) { $cmd = Get-Command usbpd -ErrorAction SilentlyContinue }
+    if ($cmd) {
+        $result.Available = $true
+        $result.Command   = $cmd.Name
+        try {
+            $ver = & $cmd.Source --version 2>$null
+            if (-not $ver) { $ver = & $cmd.Source --verson 2>$null }
+            $result.Version = ($ver | Select-Object -First 1)
+        } catch { }
+    }
+    Write-Log -Level 'INFO' -Message 'USBIPD kontrolü' -Data $result
+    return [pscustomobject]$result
 }
 
 function Test-Admin {
@@ -279,8 +336,33 @@ function Attach-RTL8821CU {
     
     # Check if usbipd is available
     if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
-        Write-Log -Level 'ERROR' -Message "usbipd not found. Please install usbipd-win."
-        return $false
+        Write-Log -Level 'WARN' -Message "usbipd not found. Attempting installation (requires Admin)."
+        if (Test-Admin) {
+            try {
+                if (Get-Command winget -ErrorAction SilentlyContinue) {
+                    winget install dorssel.usbipd-win -e --accept-source-agreements --accept-package-agreements -h | Out-Null
+                } else {
+                    $url = "https://github.com/dorssel/usbipd-win/releases/latest/download/usbipd-win_x64.msi"
+                    $msi = Join-Path $env:TEMP "usbipd-win.msi"
+                    Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
+                    $proc = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+                    if ($proc.ExitCode -ne 0) { throw "msiexec exit code $($proc.ExitCode)" }
+                    Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                Write-Log -Level 'ERROR' -Message "usbipd installation failed" -Data @{ error = $_.Exception.Message }
+                return $false
+            }
+            # Try starting service
+            try { Start-Service usbipd -ErrorAction SilentlyContinue } catch {}
+        } else {
+            Write-Log -Level 'ERROR' -Message "usbipd not found. Please install usbipd-win (Admin required)."
+            return $false
+        }
+        if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
+            Write-Log -Level 'ERROR' -Message "usbipd still not available after installation attempt."
+            return $false
+        }
     }
 
     # Enumerate and parse USB devices
@@ -490,7 +572,7 @@ function Validate-Syntax {
 }
 
 # Main execution
-if ($Help) {
+if ((Get-Variable -Name Help -ValueOnly -ErrorAction SilentlyContinue)) {
     Show-Help
     exit 0
 }
@@ -501,10 +583,13 @@ if (-not (Validate-Syntax)) {
 }
 
 # Run smoke test if requested
-if ($RunSmokeTest) {
+if ((Get-Variable -Name RunSmokeTest -ValueOnly -ErrorAction SilentlyContinue)) {
     $success = Run-SmokeTest
     exit $(if ($success) { 0 } else { 1 })
 }
+
+# Test modundaysak (Pester vb.), ana akışı atla
+if ($env:TEST_MODE) { return }
 
 # Check for admin rights if needed
 if (-not (Test-Admin)) {
@@ -516,15 +601,15 @@ if (-not (Test-Admin)) {
 try {
     Write-Log -Level 'INFO' -Message "Starting RTL8821CU setup" -Data @{ Timestamp = Get-Date }
     
-    if ($AutoAttach) {
-        $attached = Attach-RTL8821CU -AutoAttach -BusId $BusId -DistroName $DistroName
+    if ($script:AutoAttach) {
+        $attached = Attach-RTL8821CU -AutoAttach -BusId $script:BusId -DistroName $script:DistroName
         if (-not $attached) {
             throw "Failed to attach device"
         }
         Show-WSL-RestartSteps
     }
     
-    if ($GitCommit) {
+    if ($script:GitCommit) {
         $committed = Invoke-GitCommit
         if (-not $committed) {
             Write-Log -Level 'WARN' -Message "Git commit was not successful"
@@ -541,26 +626,7 @@ try {
     exit 1
 }
 
-function Show-Help {
-    [CmdletBinding()]
-    param()
-    Write-Host "setup.ps1 — Unified RTL8821CU WSL tooling (Author: Znuzhg Onyvxpv)" -ForegroundColor Cyan
-    Write-Host "Parameters:" -ForegroundColor Gray
-    Write-Host "  -DistroName <name>     Target WSL distro name"
-    Write-Host "  -AutoAttach            Attach Realtek device via usbipd non-interactively"
-    Write-Host "  -BusId <id>            BusId from 'usbipd wsl list' (e.g., 1-5)"
-    Write-Host "  -KernelPath <path>     Set WSL2 kernel path in user's .wslconfig"
-    Write-Host "  -RunSmokeTest          Run non-destructive checks"
-    Write-Host "  -GitCommit             Create a safe git commit (no push)"
-    Write-Host "  -DryRun                Alias of -WhatIf for previewing actions"
-    Write-Host "  -WhatIf / -Confirm     Standard PowerShell safety switches"
-    Write-Host ""
-    Write-Host "Examples:"
-    Write-Host "  .\setup.ps1 -DistroName \"Ubuntu-22.04\""
-    Write-Host "  .\setup.ps1 -AutoAttach -BusId \"1-5\" -DistroName \"Ubuntu-22.04\""
-    Write-Host "  .\setup.ps1 -KernelPath \"C:\\WSL\\kernel\\vmlinux-wsl2\""
-    Write-Host "  .\setup.ps1 -RunSmokeTest -DistroName \"Ubuntu-22.04\""
-}
+function Show-Help {}
 
  # One-line: initialize global paths and logging
  function Initialize-Context {
@@ -589,13 +655,11 @@ function Show-Help {
      message   = $Message
      data      = $Data
    }
-   try { $entry | ConvertTo-Json -Compress | Add-Content -Path $script:LogFile -Encoding UTF8 } catch {}
-   switch ($Level) {
-     'INFO'  { Write-Host "[INFO]  $Message" -ForegroundColor Green }
-     'WARN'  { Write-Host "[WARN]  $Message" -ForegroundColor Yellow }
-     'ERROR' { Write-Host "[ERROR] $Message" -ForegroundColor Red }
-     'DEBUG' { Write-Host "[DEBUG] $Message" -ForegroundColor DarkGray }
-   }
+    try { $entry | ConvertTo-Json -Compress | Add-Content -Path $script:LogFile -Encoding UTF8 } catch {}
+    if ($Level -eq 'INFO') { Write-Host ("[INFO]  {0}" -f $Message) -ForegroundColor Green }
+    elseif ($Level -eq 'WARN') { Write-Host ("[WARN]  {0}" -f $Message) -ForegroundColor Yellow }
+    elseif ($Level -eq 'ERROR') { Write-Host ("[ERROR] {0}" -f $Message) -ForegroundColor Red }
+    else { Write-Host ("[DEBUG] {0}" -f $Message) -ForegroundColor DarkGray }
  }
 
  # One-line: return true if current PowerShell has admin rights
@@ -609,35 +673,22 @@ function Show-Help {
    } catch { return $false }
  }
 
- # One-line: safe confirmation prompt with optional default yes
- function Confirm-Action {
-   [CmdletBinding()]
-   param(
-     [Parameter(Mandatory)][string]$Message,
-     [switch]$DefaultYes
-   )
-   if ($WhatIfPreference) {
-     Write-Log -Level 'INFO' -Message "WhatIf: $Message (skipped)"
-     return $false
-   }
-   $caption = "Confirm"
-   $prompt  = "$Message"
-   if ($PSBoundParameters['DefaultYes']) {
-     $choices = @(
-       (New-Object System.Management.Automation.Host.ChoiceDescription "&Yes","Proceed"),
-       (New-Object System.Management.Automation.Host.ChoiceDescription "&No","Cancel")
-     )
-     $default = 0
-   } else {
-     $choices = @(
-       (New-Object System.Management.Automation.Host.ChoiceDescription "&No","Cancel"),
-       (New-Object System.Management.Automation.Host.ChoiceDescription "&Yes","Proceed")
-     )
-     $default = 0
-   }
-   $selection = $Host.UI.PromptForChoice($caption, $prompt, $choices, $default)
-   return ($selection -eq 0 -and $DefaultYes) -or ($selection -eq 1 -and -not $DefaultYes)
- }
+  # Basit onay istemi (-WhatIf etkinse atlar)
+  function Confirm-Action {
+    [CmdletBinding()]
+    param(
+      [Parameter(Mandatory)][string]$Message,
+      [switch]$DefaultYes
+    )
+    if ($WhatIfPreference) {
+      Write-Log -Level 'INFO' -Message "WhatIf: $Message (skipped)"
+      return $false
+    }
+    if ($script:ForceMode -or -not [Environment]::UserInteractive) { return $true }
+    $ans = Read-Host -Prompt ("{0} [Y/n]" -f $Message)
+    if ([string]::IsNullOrWhiteSpace($ans)) { return [bool]$DefaultYes }
+    return ($ans.Trim().ToLower() -in @('y','yes','e','evet'))
+  }
 
  # One-line: normalize and quote a Windows path
  function Normalize-Path {
@@ -678,7 +729,11 @@ function Show-Help {
    $dst = Normalize-Path $Destination
    if ($PSCmdlet.ShouldProcess("$src -> $dst", "Copy")) {
      if (Get-Command robocopy.exe -ErrorAction SilentlyContinue) {
-       $dstParent = (Test-Path -LiteralPath $dst -PathType Container) ? $dst : (Split-Path -Parent $dst)
+        if (Test-Path -LiteralPath $dst -PathType Container) {
+          $dstParent = $dst
+        } else {
+          $dstParent = (Split-Path -Parent $dst)
+        }
        $null = New-Item -Path $dstParent -ItemType Directory -Force -ErrorAction SilentlyContinue
        $args = @("`"$src`"", "`"$dst`"", "/E", "/COPY:DAT", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XO")
        $proc = Start-Process -FilePath robocopy.exe -ArgumentList $args -NoNewWindow -Wait -PassThru
@@ -973,7 +1028,9 @@ Write-Log -Level 'INFO' -Message "PROJECT_ROOT for WSL set to $Env:PROJECT_ROOT"
 
 # Write a small .env inside the toolset so WSL-side scripts can source it
 $escaped = $Env:PROJECT_ROOT -replace '"','\"'
-$envCmd = "mkdir -p ~/RTL8821CU_FixSuite && printf 'export PROJECT_ROOT=\"%s\"\\n' '$escaped' > ~/RTL8821CU_FixSuite/.env && chmod 644 ~/RTL8821CU_FixSuite/.env"
+$envCmd = @"
+mkdir -p ~/RTL8821CU_FixSuite && printf 'export PROJECT_ROOT="%s"\n' '{0}' > ~/RTL8821CU_FixSuite/.env && chmod 644 ~/RTL8821CU_FixSuite/.env
+"@ -f $escaped
 & wsl.exe -d $Distro -- sh -lc $envCmd | Out-Null
 Write-Log -Level 'INFO' -Message "Wrote .env to WSL toolset (PROJECT_ROOT exported)"
 
@@ -1088,143 +1145,4 @@ Write-Log -Level 'INFO' -Message "Wrote .env to WSL toolset (PROJECT_ROOT export
    }
  }
 
- # One-line: create or update .gitignore, stage, and commit changes safely
- function Invoke-GitCommit {
-   [CmdletBinding(SupportsShouldProcess=$true)]
-   param()
-   $git = Get-Command git.exe -ErrorAction SilentlyContinue
-   if (-not $git) { Write-Log -Level 'WARN' -Message "git not found; skipping commit"; return }
-   Push-Location $script:SuiteRoot
-   try {
-     if (-not (Test-Path -LiteralPath (Join-Path $script:SuiteRoot '.git'))) {
-       if ($PSCmdlet.ShouldProcess($script:SuiteRoot, "git init")) {
-         git init | Out-Null
-         Write-Log -Level 'INFO' -Message "Initialized git repository"
-       }
-     }
-     $gi = Join-Path $script:SuiteRoot '.gitignore'
-     $ignoreLines = @("logs/", "setup_old_versions/")
-     $existing = @()
-     if (Test-Path -LiteralPath $gi) { $existing = Get-Content -LiteralPath $gi -ErrorAction SilentlyContinue }
-     $new = @()
-     foreach ($l in $ignoreLines) { if ($existing -notcontains $l) { $new += $l } }
-     if ($new.Count -gt 0 -and $PSCmdlet.ShouldProcess($gi, "Update .gitignore")) {
-       ($existing + $new) | Set-Content -LiteralPath $gi -Encoding UTF8
-       Write-Log -Level 'INFO' -Message ".gitignore updated"
-     }
-     if ($PSCmdlet.ShouldProcess($script:SuiteRoot, "git add")) {
-       git add .gitignore setup.ps1 2>$null | Out-Null
-     }
-     $hasName  = (git config --global user.name 2>$null)
-     $hasEmail = (git config --global user.email 2>$null)
-     if (-not $hasName -or -not $hasEmail) {
-       Write-Log -Level 'WARN' -Message "Git global user.name/email not set; commit may fail"
-       Write-Host "Set git identity:" -ForegroundColor Yellow
-       Write-Host "  git config --global user.name \"Your Name\"" -ForegroundColor Gray
-       Write-Host "  git config --global user.email \"you@example.com\"" -ForegroundColor Gray
-       return
-     }
-     if ($PSCmdlet.ShouldProcess($script:SuiteRoot, "git commit")) {
-       git commit -m "feat(setup): unified production setup.ps1 — generated by GPT-5 High (Author: Znuzhg Onyvxpv)" 2>$null | Out-Null
-       Write-Log -Level 'INFO' -Message "Git commit created"
-     }
-   } catch {
-     Write-Log -Level 'WARN' -Message "Git commit failed" -Data @{ error="$($_.Exception.Message)" }
-   } finally {
-     Pop-Location
-   }
- }
-
- # One-line: run non-destructive checks and capture outputs
- function Run-SmokeTest {
-   [CmdletBinding()]
-   param([string]$Distro)
-   $ok = Test-Environment -Distro $Distro
-   try {
-     $u = & usbipd.exe wsl list 2>$null
-     if ($u) { Write-Log -Level 'INFO' -Message "usbipd wsl list output captured" }
-   } catch { Write-Log -Level 'WARN' -Message "usbipd wsl list failed" }
-   try {
-     $v = & wsl.exe -l -v 2>$null
-     if ($v) { Write-Log -Level 'INFO' -Message "wsl -l -v output captured" }
-   } catch { Write-Log -Level 'WARN' -Message "wsl -l -v failed" }
-   return $ok
- }
-
- # One-line: main routine orchestrating requested actions
- function Invoke-Main {
-   [CmdletBinding(SupportsShouldProcess=$true)]
-   param()
-   if ($Help) { Show-Help; return 0 }
-   if ($DryRun) { $script:WhatIfPreference = $true; $global:WhatIfPreference = $true }
-   Initialize-Context
-   Write-Log -Level 'INFO' -Message "Setup started" -Data @{ SuiteRoot=$script:SuiteRoot; RunId=$script:RunId }
-
-   try {
-     Backup-ExistingSetupScripts
-
-     $envOk = Test-Environment -Distro $DistroName
-     if (-not $envOk) {
-       Write-Log -Level 'WARN' -Message "Environment checks reported issues; attempting Install-MissingTools"
-       Install-MissingTools
-     }
-
-     if ($RunSmokeTest) {
-       $ok = Run-SmokeTest -Distro $DistroName
-       if ($ok) {
-         Write-Log -Level 'INFO' -Message "Smoke test passed"
-         Show-WSL-RestartSteps
-         return 0
-       } else {
-         Write-Log -Level 'ERROR' -Message "Smoke test failed"
-         return 3
-       }
-     }
-
-     if ($KernelPath) {
-       Set-WSLKernel -Path $KernelPath
-       Write-Host "If kernel was updated, consider restarting WSL." -ForegroundColor Yellow
-       Show-WSL-RestartSteps
-     }
-
-     if ($DistroName) {
-       Copy-Toolset -Distro $DistroName
-     } else {
-       Write-Log -Level 'INFO' -Message "Skipping Copy-Toolset: no distro specified"
-     }
-
-     if ($AutoAttach) {
-       if (-not $DistroName) { throw "-AutoAttach requires -DistroName" }
-       if (-not $BusId)     { throw "-AutoAttach requires -BusId" }
-       Attach-RTL8821CU -AutoAttach -BusId $BusId -Distro $DistroName
-     } else {
-       Write-Host ""
-       Write-Host "usbipd guidance:" -ForegroundColor Cyan
-       Write-Host "  1) List devices:   usbipd wsl list" -ForegroundColor Gray
-       Write-Host "  2) Attach device:  usbipd wsl attach --busid <ID> --distribution \"$($DistroName)\"" -ForegroundColor Gray
-       Write-Host "  3) Validate:       wsl -d \"$($DistroName)\" -- sh -lc 'lsusb | grep -i -E \"0bda|realtek\"'" -ForegroundColor Gray
-       Write-Host ""
-       Write-Host "Use -AutoAttach -BusId <ID> -DistroName \"$($DistroName)\" for non-interactive attach." -ForegroundColor DarkGray
-     }
-
-     if ($GitCommit) {
-       Invoke-GitCommit
-     }
-
-     Write-Log -Level 'INFO' -Message "Setup completed successfully"
-     Write-Host ""
-     Write-Host "Setup completed successfully. To verify: open your WSL distro and run lsusb and ip link to confirm wlan0 is visible." -ForegroundColor Green
-     Write-Host "Logs: $script:LogFile" -ForegroundColor Gray
-     Write-Host "If kernel changed, run: wsl --shutdown" -ForegroundColor Gray
-     Write-Host ""
-     return 0
-   } catch {
-     Write-Log -Level 'ERROR' -Message "Unhandled error" -Data @{ error="$($_.Exception.Message)" }
-     Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-     return 1
-   }
- }
-
- if ($Help) { Show-Help; exit 0 }
- $exitCode = Invoke-Main
- exit $exitCode
+  # (Duplicate orchestration and git helpers removed to reduce duplication)
