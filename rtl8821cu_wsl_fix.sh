@@ -445,6 +445,7 @@ verify_system() {
     echo "===== lsusb ====="; lsusb 2>&1 || true
     echo "===== dmesg (tail) ====="; dmesg | tail -n 80 2>&1 || true
   } | tee -a "$LOG_FILE"
+
   # Quick success heuristic
   if ip -br link 2>/dev/null | grep -Eiq "\b(wlan|wl|wifi)"; then
     log "[SUCCESS] Wireless interface detected."
@@ -480,7 +481,7 @@ main() {
         local dk="$DKMS_SRC_DIR/dkms.conf"
         if [[ -f "$dk" ]]; then
           local tmp="$LOG_DIR/dkms.conf.relaxed"
-          sed 's#MAKE\[0\]=\"make #MAKE[0]=\"make KBUILD_MODPOST_WARN=1 #' "$dk" >"$tmp" || true
+          sed 's#MAKE\[0\]=\"make #MAKE[0\]=\"make KBUILD_MODPOST_WARN=1 #' "$dk" >"$tmp" || true
           _do install -m 0644 "$tmp" "$dk"
           log "[AUTO-FIX] Set KBUILD_MODPOST_WARN=1 in dkms.conf"
         fi
@@ -498,6 +499,59 @@ main() {
     else
       log "[INFO] Re-run with --run --auto-fix, or --run --force-manual for fallback build."
     fi
+  fi
+
+  # --- PERSISTENCE SETUP (WSL reboot + autoload + hotplug) ---
+  if [[ "${success:-0}" -eq 1 ]]; then
+    log "[INFO] Running final depmod -a to refresh kernel module index."
+    _do depmod -a
+
+    log "[PERSISTENCE] Enabling module autoload, hotplug, and WSL autostart."
+
+    # 1️⃣ Kernel autoload (modules-load.d)
+    echo "8821cu" | _do tee /etc/modules-load.d/8821cu.conf > /dev/null
+
+    # 2️⃣ USB hotplug rule
+    USB_VID="0bda"
+    USB_PID="c811"
+    UDEV_RULE_FILE="/etc/udev/rules.d/99-rtl8821cu.rules"
+    echo "ACTION==\"add\", SUBSYSTEM==\"usb\", ATTR{idVendor}==\"$USB_VID\", ATTR{idProduct}==\"$USB_PID\", RUN+=\"/sbin/modprobe 8821cu\"" | \
+        _do tee "$UDEV_RULE_FILE" > /dev/null
+    _do udevadm control --reload-rules || true
+
+    # 3️⃣ WSL autoload (profile.d) — DKMS reinstall fallback
+    AUTOSCRIPT="/etc/profile.d/rtl8821cu_wsl_autoload.sh"
+    cat <<'EOF' | _do tee "$AUTOSCRIPT" > /dev/null
+#!/bin/bash
+# ============================================
+# RTL8821CU WSL2 Autoload & DKMS Reinstall Helper
+# ============================================
+# Bu betik WSL açılışında otomatik olarak çalışır.
+# Eğer 8821cu modülü yüklü değilse, DKMS üzerinden yeniden kurar.
+KVER="$(uname -r)"
+if ! lsmod | grep -q 8821cu; then
+  if [[ -d "/usr/src/8821cu-5.12.0.4" ]]; then
+    echo "[Autoload] Reinstalling 8821cu module for kernel ${KVER}..."
+    sudo dkms install -m 8821cu -v 5.12.0.4 --force >/dev/null 2>&1
+    sudo modprobe 8821cu 2>/dev/null || true
+    echo "[Autoload] 8821cu module reloaded successfully."
+  else
+    echo "[Autoload] Source directory /usr/src/8821cu-5.12.0.4 not found."
+  fi
+fi
+EOF
+    _do chmod +x "$AUTOSCRIPT"
+
+    # 4️⃣ WSL config (systemd autoload)
+    if [[ ! -f /etc/wsl.conf ]] || ! grep -q "systemd=true" /etc/wsl.conf; then
+      cat <<'EOF' | _do tee /etc/wsl.conf > /dev/null
+[boot]
+systemd=true
+command="modprobe 8821cu || true"
+EOF
+    fi
+
+    log "[PERSISTENCE] Persistence setup completed."
   fi
 
   verify_system
