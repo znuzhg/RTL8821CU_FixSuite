@@ -164,6 +164,10 @@ ensure_apt_ready() {
     log "[WARN] apt-get not found; skipping package ensure. Ensure required build tools exist."
     return 0
   fi
+  if [[ "$NO_NETWORK" -eq 1 ]]; then
+    log "[INFO] --no-network set; skipping apt-get update/install. Ensure required packages exist."
+    return 0
+  fi
   local missing=()
   for p in "${PKGS[@]}"; do
     if ! dpkg -s "$p" >/dev/null 2>&1; then missing+=("$p"); fi
@@ -194,6 +198,9 @@ prepare_kernel_source() {
   fi
   KERNEL_SRC="/usr/src/wsl-kernel-src"
   if [[ ! -d "$KERNEL_SRC" ]]; then
+    if [[ "$NO_NETWORK" -eq 1 ]]; then
+      log "[ERROR] Kernel source missing and --no-network set; cannot clone WSL kernel."; return 1
+    fi
     _do git clone --depth 1 https://github.com/microsoft/WSL2-Linux-Kernel.git "$KERNEL_SRC"
   else
     log "[INFO] Reusing existing kernel source at $KERNEL_SRC"
@@ -274,7 +281,6 @@ get_driver_source() {
 # Apply local patches idempotently, record to TARGET/PATCHES_APPLIED
 apply_patches_if_any() {
   local record="$TARGET_DIR/PATCHES_APPLIED"
-  touch "$record"
   if ((${#PATCHES_FOUND[@]}==0)); then
     log "[INFO] No patches to apply."
     return 0
@@ -290,7 +296,7 @@ apply_patches_if_any() {
       if [[ "$RUN_MODE" -eq 1 ]]; then
         log "[PATCH] Applying $p to $APPLY_DIR"; git -C "$APPLY_DIR" apply "$p" && echo "$p" >>"$record"
       else
-        log "(dry-run) Would apply patch: $p to $APPLY_DIR"; echo "$p (dry-run)" >>"$record"
+        log "(dry-run) Would apply patch: $p to $APPLY_DIR"
       fi
     else
       log "[WARN] Patch not applicable: $p"
@@ -437,6 +443,9 @@ verify_system() {
     echo "===== modinfo 8821cu ====="; modinfo 8821cu 2>&1 || true
     echo "===== ip -br link ====="; ip -br link 2>&1 || true
     echo "===== iw dev ====="; iw dev 2>&1 || true
+    if command -v rfkill >/dev/null 2>&1; then
+      echo "===== rfkill list ====="; rfkill list 2>&1 || true
+    fi
     if command -v airmon-ng >/dev/null 2>&1; then
       echo "===== airmon-ng ====="; airmon-ng 2>&1 || true
     else
@@ -451,6 +460,13 @@ verify_system() {
     log "[SUCCESS] Wireless interface detected."
   else
     log "[WARN] Module may be loaded but no wireless interface visible. Check dmesg and USB passthrough."
+  fi
+  if [[ "$RUN_MODE" -eq 1 ]]; then
+    iface=$(ip -br link 2>/dev/null | awk '/^(wlan|wl|wifi)/{print $1, $2}' | awk '$2!="UP"{print $1; exit 0}')
+    if [[ -n "$iface" ]]; then
+      log "[INFO] Attempting to bring up interface $iface"
+      _do ip link set "$iface" up || true
+    fi
   fi
 }
 
@@ -529,26 +545,29 @@ main() {
 # Bu betik WSL açılışında otomatik olarak çalışır.
 # Eğer 8821cu modülü yüklü değilse, DKMS üzerinden yeniden kurar.
 KVER="$(uname -r)"
-if ! lsmod | grep -q 8821cu; then
-  if [[ -d "/usr/src/8821cu-5.12.0.4" ]]; then
-    echo "[Autoload] Reinstalling 8821cu module for kernel ${KVER}..."
-    sudo dkms install -m 8821cu -v 5.12.0.4 --force >/dev/null 2>&1
+if ! lsmod | grep -q '^8821cu\b'; then
+  ver="$(ls -1 /usr/src | awk -F'-' '/^8821cu-/ {print $2}' | sort -V | tail -n1)"
+  if [[ -n "$ver" && -d "/usr/src/8821cu-$ver" ]]; then
+    echo "[Autoload] Reinstalling 8821cu module (DKMS $ver) for kernel ${KVER}..."
+    sudo dkms install -m 8821cu -v "$ver" --force >/dev/null 2>&1
     sudo modprobe 8821cu 2>/dev/null || true
     echo "[Autoload] 8821cu module reloaded successfully."
   else
-    echo "[Autoload] Source directory /usr/src/8821cu-5.12.0.4 not found."
+    echo "[Autoload] No /usr/src/8821cu-<ver> found; skipping."
   fi
 fi
 EOF
     _do chmod +x "$AUTOSCRIPT"
 
-    # 4️⃣ WSL config (systemd autoload)
-    if [[ ! -f /etc/wsl.conf ]] || ! grep -q "systemd=true" /etc/wsl.conf; then
-      cat <<'EOF' | _do tee /etc/wsl.conf > /dev/null
-[boot]
-systemd=true
-command="modprobe 8821cu || true"
-EOF
+    # 4️⃣ WSL config (systemd autoload) — merge without overwriting
+    if [[ ! -f /etc/wsl.conf ]]; then
+      printf "[wsl2]\nsystemd=true\n[boot]\ncommand=/bin/true\n" | _do tee /etc/wsl.conf > /dev/null
+    else
+      _do cp /etc/wsl.conf /etc/wsl.conf.bak || true
+      grep -q '^\s*\[wsl2\]' /etc/wsl.conf || printf "\n[wsl2]\n" | _do tee -a /etc/wsl.conf > /dev/null
+      grep -q '^\s*systemd\s*=\s*true' /etc/wsl.conf || printf "systemd=true\n" | _do tee -a /etc/wsl.conf > /dev/null
+      grep -q '^\s*\[boot\]' /etc/wsl.conf || printf "\n[boot]\n" | _do tee -a /etc/wsl.conf > /dev/null
+      grep -q '^\s*command\s*=\s*/bin/true' /etc/wsl.conf || printf "command=/bin/true\n" | _do tee -a /etc/wsl.conf > /dev/null
     fi
 
     log "[PERSISTENCE] Persistence setup completed."
@@ -563,7 +582,11 @@ EOF
     log "[NOTE] ai_helper.py not available; skipping summary."
   fi
 
-  log "[DONE]"
+  if lsmod | grep -q '^8821cu\b'; then
+    log "DONE success"
+  else
+    log "DONE failure"
+  fi
 }
 
 main "$@"
