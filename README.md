@@ -43,7 +43,7 @@
 
   - WSL terminalinde proje dizinine gidin:
 
-    cd /mnt/c/Users/<kullanıcı>/Desktop/RTL8821CU_FxSute-local/repo
+    cd /mnt/c/Users/<kullanıcı>/Downloads/RTL8821CU_FxSuite/
 
   2. update.sh ile tüm bağımlılıklar kurulur
 
@@ -60,7 +60,7 @@
 
   - Yönetici PowerShell açın; proje klasörüne gidin:
 
-    cd C:\Users\<kullanıcı>\Desktop\RTL8821CU_FxSute-local\repo
+    cd C:\Users\<kullanıcı>\Downloads\RTL8821CU_FxSuite\
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
     Unblock-File -Path .\setup.ps1
   - Cihazı bağlayın:
@@ -72,15 +72,15 @@
       - usbipd 5.3+ sözdizimi önceliklidir: usbipd attach --busid <id> --wsl <distro>
       - --wsl desteklenmezse fallback: usbipd attach --busid <id>
 
-  4. WSL içinde otomatik olarak rtl8821cu_wsl_fx.sh kullanılır
+  4. WSL içinde otomatik olarak rtl8821cu_wsl_fix.sh kullanılır
 
   - Bağlama tamamlandıktan sonra WSL tarafında sürücü kurulumu:
 
     cd /mnt/c/Users/<kullanıcı>/Desktop/RTL8821CU_FxSute-local/repo
-    sudo bash rtl8821cu_wsl_fx.sh --run --auto-fix
+    sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
   - Ağ kısıtlı ise:
 
-    sudo bash rtl8821cu_wsl_fx.sh --run --auto-fix --no-network
+    sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix --no-network
   - Betik, kernel kaynaklarını hazırlayıp (headers yoksa Microsoft WSL kernel source fallback ile), DKMS add/build/
     install akışını çalıştırır; hatalarda otomatik düzeltme dener ve kalıcılık ayarlarını güvenle etkinleştirir.
 
@@ -115,7 +115,7 @@
 
         sudo DEBIAN_FRONTEND=noninteractive bash update.sh
         sudo bash update.sh --no-network
-  - rtl8821cu_wsl_fx.sh (WSL):
+  - rtl8821cu_wsl_fix.sh (WSL):
       - Parametreler: --run, --dry-run, --auto-fix, --force-manual, --no-network, --log-dir <yol>
       - Örnek:
 
@@ -126,7 +126,7 @@
 
   - Tüm betikler “START/INFO/WARN/ERROR/DONE” formatında log üretir.
   - Windows tarafı logları: setup.ps1 için logs\YYYYmmdd_HHMMSS\setup.log
-  - WSL tarafı logları: rtl8821cu_wsl_fx.sh için logs/YYYYmmdd_HHMMSS/run.log ve logs/latest sembolik bağlantısı
+  - WSL tarafı logları: rtl8821cu_wsl_fix.sh için logs/YYYYmmdd_HHMMSS/run.log ve logs/latest sembolik bağlantısı
   - a_helper.py summarize <log> ile JSON özet ve status: success|failure alanı üretilebilir.
   - Hata durumunda betikler non‑zero (başarısız) çıkış kodu verir.
 
@@ -149,7 +149,6 @@
 
   - Betikler güvenle tekrar çalıştırılabilir; mevcut durum (bind/detach, var olan DKMS kaynakları, wsl.conf)
     gözetilir ve yalnızca gerekli adımlar uygulanır.
-  - Uzak depoya (GitHub vb.) push/PR gerekmez/önerilmez. Kod yalnızca yerelde çalışır.
   - Sadece WSL içinde, sürücü/kernel kaynağı gereksinimi olduğunda git clone; yama uygulamada git apply kullanılır
     (off‑line modda atlanır).
 
@@ -208,3 +207,4 @@
       4. Gerekirse:
 
          usbipd detach --busid <BUSID>
+  Not : "wsl kapatılıp tekrar açıldığında yeni bir windows terminalde [ usbipd.exe attach --busid <BUSID> --wsl <DISTRO_NAME> ] yapılması gerekir"
