@@ -11,9 +11,6 @@ Amaç:
 Kullanım:
   python3 ai_helper.py summarize <logfile> [--target <dir>]
 
-Örnek:
-  python3 ai_helper.py summarize logs/latest/run.log
-
 Çıktı:
   {
     "timestamp": "...",
@@ -21,11 +18,9 @@ Kullanım:
     "warnings": [...],
     "suggested_fixes": [...],
     "dkms_make_log_tail": "...",
-    "applied_patches": [...]
+    "applied_patches": [...],
+    "status": "success|failure|unknown"
   }
-
-Not:
-  TARGET klasöründe PATCHES_APPLIED bulunuyorsa otomatik okunur.
 ===========================================================
 """
 
@@ -36,37 +31,54 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from collections import deque
+
 
 def tail_lines(path, n=200):
     try:
+        d = deque(maxlen=n)
         with open(path, 'r', errors='replace') as f:
-            lines = f.readlines()
-        return ''.join(lines[-n:])
+            for line in f:
+                d.append(line)
+        return ''.join(d)
     except Exception:
         return ''
 
+
 ERROR_PATTERNS = [
-    r'error:',
-    r'failed',
+    r'\bfatal error\b',
+    r'\berror:\b',
+    r'\bfailed\b',
     r'No rule to make target',
     r'Module\.symvers',
     r'modpost:.*Undefined',
     r'KERNEL_SOURCE_DIR',
     r'PWD: not found',
+    r'implicit declaration',
+    r'undefined reference',
+    r'invalid',
+    r'not found',
 ]
+
 
 WARN_PATTERNS = [
     r'warn(ing)?:',
     r'deprecated',
     r'will be ignored',
+    r'incompatible',
+    r'mismatch',
 ]
+
 
 SUGGESTION_RULES = [
     (r'Module\.symvers', 'Copy Module.symvers from kernel source or run: make modules_prepare in kernel tree.'),
     (r'modpost.*Undefined', 'Re-run kernel prepare and ensure correct KERNEL_SRC. Try: make modules_prepare; then DKMS build again.'),
     (r'KERNEL_SOURCE_DIR|PWD', 'Rewrite dkms.conf to avoid add-time variable expansion issues.'),
     (r'No rule to make target', 'Ensure kernel headers/source present. Set KERNEL_SRC properly and run modules_prepare.'),
+    (r'implicit declaration', 'Enable correct CFLAGS or ensure headers match kernel; consider adding -Wno-error for warnings-only builds.'),
+    (r'undefined reference', 'Likely missing symbol export; check Module.symvers and ensure correct kernel source path.'),
 ]
+
 
 def extract_matches(lines, patterns):
     out = []
@@ -117,11 +129,13 @@ def summarize_log(logfile: str, target_dir: str):
         'suggested_fixes': [],
         'dkms_make_log_tail': '',
         'applied_patches': [],
+        'status': 'unknown',
     }
     lines = []
     try:
         with open(logfile, 'r', errors='replace') as f:
-            lines = f.readlines()
+            for ln in f:
+                lines.append(ln)
     except Exception as e:
         result['notes'].append(f'Could not read logfile: {e}')
     result['errors'] = extract_matches(lines, ERROR_PATTERNS)
@@ -142,6 +156,15 @@ def summarize_log(logfile: str, target_dir: str):
         result['notes'].append('No DKMS make.log found.')
 
     result['applied_patches'] = load_applied_patches(Path(target_dir))
+
+    # status
+    joined = '\n'.join(lines[-400:])
+    if re.search(r'DONE success|Setup completed successfully', joined, re.IGNORECASE):
+        result['status'] = 'success'
+    elif result['errors']:
+        result['status'] = 'failure'
+    else:
+        result['status'] = 'unknown'
     return result
 
 
