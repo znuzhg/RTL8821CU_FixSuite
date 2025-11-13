@@ -20,7 +20,6 @@ param(
   [switch]$AutoAttach,
   [string]$BusId,
   [string]$DistroName,
-  [switch]$GitCommit,
   [switch]$Force,
   [string]$LogDir
 )
@@ -57,7 +56,6 @@ function Start-Setup {
         [switch]$AutoAttach,
         [string]$BusId,
         [string]$DistroName,
-        [switch]$GitCommit,
         [switch]$Force,
         [string]$LogDir
     )
@@ -70,7 +68,6 @@ function Start-Setup {
     $script:AutoAttach = [bool]$AutoAttach
     $script:BusId = $BusId
     $script:DistroName = $DistroName
-    $script:GitCommit = [bool]$GitCommit
     $script:Force = [bool]$Force
     $script:LogDir = $LogDir
     
@@ -79,7 +76,7 @@ function Start-Setup {
 }
 
 # Script giriş noktası
-Start-Setup -Help:$Help -DryRun:$DryRun -RunSmokeTest:$RunSmokeTest -AutoAttach:$AutoAttach -BusId $BusId -DistroName $DistroName -GitCommit:$GitCommit -Force:$Force -LogDir $LogDir
+Start-Setup -Help:$Help -DryRun:$DryRun -RunSmokeTest:$RunSmokeTest -AutoAttach:$AutoAttach -BusId $BusId -DistroName $DistroName -Force:$Force -LogDir $LogDir
 
 
 # Set strict mode and UTF-8 encoding
@@ -107,7 +104,7 @@ function Show-Help {
     param()
     Write-Host "RTL8821CU WSL2 Fix Tool" -ForegroundColor Cyan
     Write-Host "Usage: .\setup.ps1 [-Help] [-DryRun] [-RunSmokeTest] [-AutoAttach] [-BusId <id>]"
-    Write-Host "                     [-DistroName <name>] [-GitCommit] [-Force] [-LogDir <path>]"
+    Write-Host "                     [-DistroName <name>] [-Force] [-LogDir <path>]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -Help           Show this help message"
@@ -116,7 +113,6 @@ function Show-Help {
     Write-Host "  -AutoAttach     Automatically attach the specified USB device"
     Write-Host "  -BusId          USB device bus ID (required with -AutoAttach)"
     Write-Host "  -DistroName     Target WSL2 distribution name"
-    Write-Host "  -GitCommit      Create a git commit after successful setup"
     Write-Host "  -Force          Skip confirmation prompts"
     Write-Host "  -LogDir         Custom log directory"
     Write-Host ""
@@ -181,6 +177,27 @@ function Test-Usbipd {
     }
     Write-Log -Level 'INFO' -Message 'USBIPD kontrolü' -Data $result
     return [pscustomobject]$result
+}
+
+# Detect default WSL distro (similar to auto-fx.ps1)
+function Get-DefaultDistro {
+    [CmdletBinding()]
+    param()
+    try {
+        $installed = (& wsl -l -q 2>$null) | Where-Object { $_ -and $_.Trim().Length -gt 0 } | ForEach-Object { $_.Trim() }
+    } catch { $installed = @() }
+    if (-not $installed -or $installed.Count -eq 0) { return $null }
+    try {
+        $v = & wsl -l -v 2>$null
+        $defLine = $v | Where-Object { $_ -match '\*' } | Select-Object -First 1
+        if ($defLine) {
+            $cand = ($defLine -replace '^[\s\*]+','' -split '\s+')[0]
+            if ($installed -contains $cand) { return $cand }
+        }
+    } catch {}
+    $pref = @('kali-linux') + ($installed | Where-Object { $_ -match '(?i)^Ubuntu' }) + ($installed | Where-Object { $_ -match '(?i)^Debian' })
+    foreach ($p in $pref) { if ($installed -contains $p) { return $p } }
+    return $installed[0]
 }
 
 function Test-Admin {
@@ -336,34 +353,11 @@ function Attach-RTL8821CU {
     
     # Check if usbipd is available
     if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
-        Write-Log -Level 'WARN' -Message "usbipd not found. Attempting installation (requires Admin)."
-        if (Test-Admin) {
-            try {
-                if (Get-Command winget -ErrorAction SilentlyContinue) {
-                    winget install dorssel.usbipd-win -e --accept-source-agreements --accept-package-agreements -h | Out-Null
-                } else {
-                    $url = "https://github.com/dorssel/usbipd-win/releases/latest/download/usbipd-win_x64.msi"
-                    $msi = Join-Path $env:TEMP "usbipd-win.msi"
-                    Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
-                    $proc = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
-                    if ($proc.ExitCode -ne 0) { throw "msiexec exit code $($proc.ExitCode)" }
-                    Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
-                }
-            } catch {
-                Write-Log -Level 'ERROR' -Message "usbipd installation failed" -Data @{ error = $_.Exception.Message }
-                return $false
-            }
-            # Try starting service
-            try { Start-Service usbipd -ErrorAction SilentlyContinue } catch {}
-        } else {
-            Write-Log -Level 'ERROR' -Message "usbipd not found. Please install usbipd-win (Admin required)."
-            return $false
-        }
-        if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
-            Write-Log -Level 'ERROR' -Message "usbipd still not available after installation attempt."
-            return $false
-        }
+        Write-Log -Level 'ERROR' -Message "usbipd not found. Please install usbipd-win."
+        return $false
     }
+    # Ensure service running
+    try { $svc = Get-Service -Name 'usbipd' -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Running') { Start-Service usbipd; $svc.WaitForStatus('Running','00:00:10') } } catch {}
 
     # Enumerate and parse USB devices
     Write-Log -Level 'INFO' -Message "Scanning for USB devices..."
@@ -399,18 +393,35 @@ function Attach-RTL8821CU {
                 return $false
             }
 
+            # If Not shared, bind first (required for attach)
+            if ($target.State -eq 'Not shared') {
+                Write-Host "[INFO] Device not shared — binding..." -ForegroundColor Yellow
+                & usbipd.exe bind --busid $BusId | Out-Null
+                Start-Sleep -Seconds 1
+            }
             # Detach if already attached
             if ($target.State -eq 'Attached') {
-                Write-Host "[INFO] Device already attached — detaching first..." -ForegroundColor Yellow
+                Write-Host "[INFO] Device already attached - detaching first..." -ForegroundColor Yellow
                 & usbipd.exe detach --busid $BusId | Out-Null
                 Start-Sleep -Seconds 2
             }
 
             # Attach to WSL
             Write-Host "[INFO] Attaching device $BusId to WSL..." -ForegroundColor Cyan
-            $attachOut = & usbipd.exe attach --busid $BusId --wsl 2>&1 | Tee-Object -Variable attachOut
+            $attachCmd = @('attach','--busid', $BusId)
+            $useWslSwitch = $true
+            $distroToUse = if ($DistroName) { $DistroName } else { Get-DefaultDistro }
+            if ($distroToUse) { $attachCmd += @('--wsl', $distroToUse) }
+            $attachOut = & usbipd.exe @attachCmd 2>&1 | Tee-Object -Variable attachOut
+            $exit = $LASTEXITCODE
+            if ($exit -ne 0 -or ($attachOut -match 'unrecognized option|unknown option|has been removed')) {
+                Write-Log -Level 'WARN' -Message "--wsl attach failed; falling back to default attach." -Data @{ exit=$exit; output=$attachOut }
+                $attachCmd = @('attach','--busid', $BusId)
+                $attachOut = & usbipd.exe @attachCmd 2>&1 | Tee-Object -Variable attachOut
+                $exit = $LASTEXITCODE
+            }
             
-            if ($LASTEXITCODE -ne 0) {
+            if ($exit -ne 0) {
                 throw "Attach failed: $attachOut"
             }
             
@@ -421,15 +432,16 @@ function Attach-RTL8821CU {
                 Output = $attachOut
             }
             
-            # Verify in WSL if DistroName is provided
-            if (-not [string]::IsNullOrEmpty($DistroName)) {
-                Write-Host "[INFO] Verifying device in WSL ($DistroName)..." -ForegroundColor Cyan
-                $check = & wsl.exe -d $DistroName -- bash -c "lsusb | grep -i 0bda:c811" 2>$null
+            # Verify in WSL if a distro is available
+            $verifyDistro = if ($DistroName) { $DistroName } else { Get-DefaultDistro }
+            if (-not [string]::IsNullOrEmpty($verifyDistro)) {
+                Write-Host "[INFO] Verifying device in WSL ($verifyDistro)..." -ForegroundColor Cyan
+                $check = & wsl.exe -d $verifyDistro -- bash -c "lsusb | grep -i 0bda:c811" 2>$null
                 if ($check) {
                     Write-Host "[OK] Realtek adapter detected in WSL: $check" -ForegroundColor Green
                     Write-Log -Level 'INFO' -Message "Realtek device detected in WSL" -Data @{ Output = $check }
                 } else {
-                    Write-Warning "Adapter not visible in WSL yet — try replugging or restarting WSL."
+                    Write-Warning "Adapter not visible in WSL yet - try replugging or restarting WSL."
                     Write-Log -Level 'WARN' -Message "Realtek device not yet visible in WSL"
                 }
             }
@@ -520,31 +532,7 @@ function Run-SmokeTest {
     return $allPassed
 }
 
-function Invoke-GitCommit {
-    [CmdletBinding(SupportsShouldProcess=$true)]
-    param()
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Log -Level 'WARN' -Message "Git not found, skipping commit"
-        return $false
-    }
-    try {
-        Push-Location $script:SuiteRoot
-        if (-not (Test-Path -Path '.git')) {
-            git init | Out-Null
-        }
-        git add setup.ps1
-        if ($PSCmdlet.ShouldProcess("Commit changes to git")) {
-            git commit -m "feat(setup): unify setup.ps1 — generated by SWE-1; author Znuzhg Onyvxpv"
-            Write-Log -Level 'INFO' -Message "Changes committed to git"
-            return $true
-        }
-    } catch {
-        Write-Log -Level 'ERROR' -Message "Git commit failed" -Data @{ Error = $_.Exception.Message }
-        return $false
-    } finally {
-        Pop-Location
-    }
-}
+function Invoke-GitCommit { param() return $false } # disabled per no-git rule
 
 function Validate-Syntax {
     [CmdletBinding()]
@@ -591,10 +579,15 @@ if ((Get-Variable -Name RunSmokeTest -ValueOnly -ErrorAction SilentlyContinue)) 
 # Test modundaysak (Pester vb.), ana akışı atla
 if ($env:TEST_MODE) { return }
 
-# Check for admin rights if needed
+# Self-elevation to Administrator
 if (-not (Test-Admin)) {
-    Write-Host "This script requires administrator privileges." -ForegroundColor Red
-    exit 1
+    Write-Host "Yönetici hakları gerekli. Betik yükseltiliyor..." -ForegroundColor Yellow
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Process -Id $PID).Path
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" " + ($MyInvocation.BoundParameters.GetEnumerator() | ForEach-Object { "-$($_.Key) `"$($_.Value)`"" } -join ' ')
+    $psi.Verb = 'runas'
+    try { [Diagnostics.Process]::Start($psi) | Out-Null } catch { Write-Error "Yükseltme iptal edildi: $($_.Exception.Message)"; exit 1 }
+    exit 0
 }
 
 # Main logic
@@ -609,12 +602,7 @@ try {
         Show-WSL-RestartSteps
     }
     
-    if ($script:GitCommit) {
-        $committed = Invoke-GitCommit
-        if (-not $committed) {
-            Write-Log -Level 'WARN' -Message "Git commit was not successful"
-        }
-    }
+    # No git operations allowed (skipped)
     
     Write-Log -Level 'INFO' -Message "Setup completed successfully"
     Write-Host "Setup completed successfully!" -ForegroundColor Green
@@ -800,7 +788,7 @@ function Show-Help {}
    } else {
      Write-Log -Level 'INFO' -Message "Administrator privileges detected"
    }
-   foreach ($exe in @('usbipd.exe','wsl.exe','robocopy.exe','git.exe')) {
+   foreach ($exe in @('usbipd.exe','wsl.exe','robocopy.exe')) {
      if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) {
        Write-Log -Level 'WARN' -Message "$exe not found in PATH"
        if ($exe -in @('usbipd.exe','wsl.exe')) { $ok = $false }
@@ -900,26 +888,6 @@ function Show-Help {}
      }
    } catch {
      Write-Log -Level 'WARN' -Message "usbipd service start failed" -Data @{ error="$($_.Exception.Message)" }
-   }
-
-   # Install Git via winget
-   if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-     if (Confirm-Action -Message "Install Git via winget?" -DefaultYes) {
-       try {
-         if (Get-Command winget -ErrorAction SilentlyContinue) {
-           if ($PSCmdlet.ShouldProcess("Git", "winget install Git.Git")) {
-             winget install Git.Git -e --accept-source-agreements --accept-package-agreements -h | Out-Null
-             Write-Log -Level 'INFO' -Message "Git installation attempted via winget"
-           }
-         } else {
-           Write-Host "Install Git manually: https://git-scm.com/download/win" -ForegroundColor Yellow
-         }
-       } catch {
-         Write-Log -Level 'WARN' -Message "Git install failed" -Data @{ error="$($_.Exception.Message)" }
-       }
-     }
-   } else {
-     Write-Log -Level 'INFO' -Message "Git already installed"
    }
 
    # Suggest PowerShell 7 install if missing
