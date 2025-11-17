@@ -71,21 +71,19 @@ Kodu kopyala
 sudo DEBIAN_FRONTEND=noninteractive bash update.sh
 Ağ yoksa:
 
-bash
-Kodu kopyala
 sudo bash update.sh --no-network
 Headers bulunmazsa betik uyarır ve kernel source fallback ile devam eder.
 
 3️⃣ Windows tarafında setup.ps1 çalıştırın (Admin)
 powershell
-Kodu kopyala
+
 cd C:\Users\<kullanıcı>\Downloads\RTL8821CU_FixSuite
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 Unblock-File -Path .\setup.ps1
 Çalıştırın:
 
 powershell
-Kodu kopyala
+
 .\setup.ps1 -AutoAttach -DistroName "kali-linux" -BusId "2-13" -Force -Verbose
 Notlar:
 
@@ -101,16 +99,16 @@ Eski sürüm → fallback usbipd attach --busid
 
 4️⃣ WSL içinde sürücüyü kurun
 bash
-Kodu kopyala
+
 sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
 Off-line mod:
 
 bash
-Kodu kopyala
+
 sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix --no-network
 🔌 USBIPD Komut Özeti
 powershell
-Kodu kopyala
+
 # Cihazları listele
 usbipd list
 
@@ -128,47 +126,45 @@ usbipd detach --busid 2-13
 📌 WSL yeniden başlatıldığında (wsl --shutdown) cihazı tekrar bağlamanız gerekir:
 
 powershell
-Kodu kopyala
+
 usbipd.exe attach --busid --wsl <DISTRO_NAME>
 📄 Loglama
+
 Windows logları:
-
-arduino
-Kodu kopyala
 logs\YYYYmmdd_HHMMSS\setup.log
-WSL logları:
 
+WSL logları:
 bash
-Kodu kopyala
+
 logs/YYYYmmdd_HHMMSS/run.log
 logs/latest
 AI ile log özetleme:
 
 bash
-Kodu kopyala
+
 python3 ai_helper.py summarize logs/latest/run.log
 🟢 Kurulum Kontrolü
 Cihaz görünüyor mu?
 
 bash
-Kodu kopyala
+
 lsusb | grep -i 0bda:c811
 Modül yüklü mü?
 
 bash
-Kodu kopyala
+
 lsmod | grep '^8821cu'
 modinfo 8821cu
 Arayüz aktif mi?
 
 bash
-Kodu kopyala
+
 ip -br link
 rfkill list
 Gerekirse:
 
 bash
-Kodu kopyala
+
 sudo ip link set wlan0 up
 rfkill unblock all
 ❗ Sık Karşılaşılan Hatalar
@@ -198,3 +194,4 @@ SECURITY.md
 📜 Lisans
 MIT License
 © 2025 Znuzhg Onyvxpv
+
