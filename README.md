@@ -1,5 +1,5 @@
 # 🚀 RTL8821CU FixSuite – WSL2 Wi-Fi Sürücü Aracı  
-**Version:** V1.0.1  
+**Sürüm:** V1.0.1  
 **Geliştirici:** Znuzhg Onyvxpv  
 **Lisans:** MIT  
 
@@ -7,15 +7,15 @@
 
 ## 📌 Kısa Açıklama
 
-RTL8821CU FixSuite, Windows + WSL2 üzerinde **Realtek RTL8821CU USB Wi-Fi adaptörünü** otomatik olarak WSL içine bağlayan, DKMS ile derleyip kuran ve kalıcı hale getiren bir araçtır.
+**RTL8821CU FixSuite**, Windows + WSL2 üzerinde **Realtek RTL8821CU USB Wi-Fi adaptörünü**, usbipd kullanarak WSL içine otomatik bağlayan; DKMS ile derleyip kuran; kalıcı, güvenli ve tamamen otomatik bir çözüm aracıdır.
 
-Bu proje:
+Bu araç:
 
-- Tek komutla sürücü kurar  
-- WSL2 içinde Wi-Fi adaptörünü sorunsuz kullanmanı sağlar  
-- usbipd, DKMS ve kernel source adımlarını otomatik yönetir  
-- Hataları mümkün olduğunca otomatik düzeltir ve loglar  
-- Off-line mod ile internetsiz ortamda da çalışabilir  
+- ✔ Tek komutla sürücü kurar  
+- ✔ WSL2 içinde Wi-Fi adaptörünü sorunsuz kullanmanızı sağlar  
+- ✔ usbipd, DKMS ve kernel source adımlarını otomatik yönetir  
+- ✔ Otomatik düzeltme mekanizmasına sahiptir  
+- ✔ Off-line mod ile internetsiz ortamda bile kurulabilir  
 
 ---
 
@@ -25,18 +25,18 @@ Bu proje:
 |--------|----------|
 | 🔌 USBIPD otomasyonu | Windows → WSL arası bind / detach / attach işlemleri |
 | ⚡ usbipd 5.3+ desteği | `usbipd attach --wsl` sözdizimi, eski sürümler için fallback |
-| 🛠️ DKMS derleme akışı | `add → build → install` ve yaygın hatalar için otomatik düzeltme |
+| 🛠️ DKMS derleme akışı | `add → build → install` + yaygın hatalar için otomatik düzeltme |
 | 🔁 Kalıcılık | `modules-load`, `udev rules`, `wsl.conf` birleştirme ve autoload |
-| 🌐 Off-line mod | `--no-network` ile `apt` ve `git clone` adımlarını atlar |
+| 🌐 Off-line mod | `--no-network` ile apt ve git clone adımlarını atlar |
 | 🧠 AI log analizi | `ai_helper.py summarize` ile JSON özet ve hata analizi |
-| 📦 Kernel source fallback | Headers yoksa WSL kernel source indirip hazırlar |
+| 📦 Kernel source fallback | Headers yoksa WSL kernel source indirip hazırlama |
 | 🔄 İdempotent betikler | Betikler güvenle tekrar tekrar çalıştırılabilir |
 
 ---
 
 ## 📂 Proje Klasör Yapısı
 
-Aşağıdaki tablo, FixSuite içindeki dosya ve klasörlerin anlamını gösterir:
+Aşağıdaki tablo FixSuite içindeki dosya ve klasörlerin işlevlerini gösterir:
 
 | Klasör / Dosya | Açıklama |
 |----------------|----------|
@@ -44,7 +44,7 @@ Aşağıdaki tablo, FixSuite içindeki dosya ve klasörlerin anlamını gösteri
 | `update.sh` | WSL bağımlılık kurulumu, headers kontrolü, off-line mod |
 | `rtl8821cu_wsl_fix.sh` | DKMS derleme, kernel source fallback, kalıcılık ayarları |
 | `ai_helper.py` | Log → JSON özetleme ve hata analizi |
-| `logs/` | Windows ve WSL logları, `latest` sembolik bağlantısı |
+| `logs/` | Windows & WSL logları, `latest` sembolik bağlantısı |
 | `README.md` | Bu dokümantasyon dosyası |
 
 ---
@@ -52,14 +52,14 @@ Aşağıdaki tablo, FixSuite içindeki dosya ve klasörlerin anlamını gösteri
 ## 🖥️ Desteklenen Sistemler
 
 - Windows 10 / 11  
-- WSL2 (Kali, Ubuntu, Debian)  
-- `usbipd-win` 5.3+  
+- WSL2 (Kali Linux, Ubuntu, Debian)  
+- usbipd-win **5.3+**  
 - Windows tarafında **Admin PowerShell**  
-- WSL tarafında **root / sudo** yetkisi  
+- WSL tarafında **root/sudo** yetkisi  
 
 ---
 
-## 🚀 Kurulum
+## 🚀 Kurulum (Adım Adım Kılavuz)
 
 ### 1️⃣ WSL içinde proje dizinine gidin
 
@@ -74,32 +74,30 @@ Ağ yoksa:
 bash
 Kodu kopyala
 sudo bash update.sh --no-network
-Bazı WSL kernel sürümlerinde linux-headers-$(uname -r) paketi bulunmayabilir. Bu durumda betik uyarı verir ve kernel source fallback ile devam eder.
+Headers bulunmazsa betik uyarır ve kernel source fallback ile devam eder.
 
-3️⃣ Windows tarafında setup.ps1 çalıştırın
-Admin PowerShell açın:
-
+3️⃣ Windows tarafında setup.ps1 çalıştırın (Admin)
 powershell
 Kodu kopyala
 cd C:\Users\<kullanıcı>\Downloads\RTL8821CU_FixSuite
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 Unblock-File -Path .\setup.ps1
-Cihazı bağlayın:
+Çalıştırın:
 
 powershell
 Kodu kopyala
 .\setup.ps1 -AutoAttach -DistroName "kali-linux" -BusId "2-13" -Force -Verbose
 Notlar:
 
-BusId vermediğinizde script Realtek (VID:PID=0bda:c811) cihazını otomatik bulmaya çalışır.
+BusId verilmezse script Realtek cihazını otomatik bulur
 
-Cihaz “Not shared” ise önce usbipd bind --busid yapılır.
+“Not shared” → otomatik usbipd bind
 
-Cihaz “Attached” ise önce usbipd detach --busid ile ayrılır.
+“Attached” → otomatik usbipd detach
 
-usbipd 5.3+ ise öncelik usbipd attach --busid --wsl.
+usbipd ≥ 5.3 → usbipd attach --wsl
 
-Eski sürümlerde fallback: usbipd attach --busid.
+Eski sürüm → fallback usbipd attach --busid
 
 4️⃣ WSL içinde sürücüyü kurun
 bash
@@ -110,40 +108,41 @@ Off-line mod:
 bash
 Kodu kopyala
 sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix --no-network
-Betik, kernel source hazırlığı, DKMS add/build/install akışı, otomatik düzeltmeler ve kalıcılık ayarlarını yönetir.
-
-🔌 USBIPD Komut Özeti (Windows)
+🔌 USBIPD Komut Özeti
 powershell
 Kodu kopyala
 # Cihazları listele
 usbipd list
 
-# Cihazı paylaşıma aç
+# Paylaşıma aç
 usbipd bind --busid 2-13
 
-# Cihazı WSL'e bağla (usbipd 5.3+)
+# WSL'e bağla
 usbipd attach --busid 2-13 --wsl kali-linux
 
-# Varsayılan distro için:
+# Varsayılan distro ile bağla
 usbipd attach --busid 2-13
 
 # Bağlantıyı kes
 usbipd detach --busid 2-13
-Not: WSL tamamen kapatılıp (wsl --shutdown) tekrar açıldığında, yeni bir Windows terminalde tekrar usbipd.exe attach --busid --wsl <DISTRO_NAME> komutunu çalıştırmanız gerekir.
+📌 WSL yeniden başlatıldığında (wsl --shutdown) cihazı tekrar bağlamanız gerekir:
 
+powershell
+Kodu kopyala
+usbipd.exe attach --busid --wsl <DISTRO_NAME>
 📄 Loglama
 Windows logları:
 
-text
+arduino
 Kodu kopyala
 logs\YYYYmmdd_HHMMSS\setup.log
 WSL logları:
 
-text
+bash
 Kodu kopyala
 logs/YYYYmmdd_HHMMSS/run.log
-logs/latest   # son çalışmanın sembolik bağlantısı
-AI özetleme:
+logs/latest
+AI ile log özetleme:
 
 bash
 Kodu kopyala
@@ -160,7 +159,7 @@ bash
 Kodu kopyala
 lsmod | grep '^8821cu'
 modinfo 8821cu
-Arayüz var mı?
+Arayüz aktif mi?
 
 bash
 Kodu kopyala
@@ -174,21 +173,21 @@ sudo ip link set wlan0 up
 rfkill unblock all
 ❗ Sık Karşılaşılan Hatalar
 Hata	Sebep	Çözüm
-usbipd bulunamadı	usbipd-win kurulu değil	winget install dorssel.usbipd-win ile kurun
-Cihaz "Not shared"	Cihaz paylaşıma açılmamış	usbipd bind --busid 2-13
-Adaptör WSL'de görünmüyor	USB tekrar bağlanmamış	wsl --shutdown → WSL aç → yeniden attach
-DKMS build failed	Eksik semboller / kaynak	sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix ve make.log incele
-linux-headers yok	Bazı WSL kernel sürümleri için paket yok	Betik kernel source fallback ile devam eder
+usbipd bulunamadı	usbipd-win kurulu değil	winget install dorssel.usbipd-win
+Cihaz "Not shared"	Paylaşım aktif değil	usbipd bind --busid 2-13
+DKMS build failed	Eksik semboller veya kaynak	rtl8821cu_wsl_fix.sh --run --auto-fix
+linux-headers yok	WSL kernel paketi mevcut değil	Kernel source fallback otomatik devreye girer
+WLAN görünmüyor	Cihaz bağlanmamış / WSL kapalı	wsl --shutdown → tekrar attach
 
 🔐 Güvenlik
-Betikler idempotent çalışacak şekilde tasarlanmıştır.
+Betikler tamamen idempotent çalışır
 
-Off-line mod, internet erişimi olmayan ortamlarda kullanım içindir.
+Off-line mod, internet olmayan ortamlarda kullanım içindir
 
-Kullanıcıya ait kişisel veri toplanmaz veya dışarı gönderilmez.
+Hiçbir kullanıcı verisi toplanmaz
 
-🤝 Katkı
-Katkıda bulunmak isterseniz lütfen şu belgeleri inceleyin:
+🤝 Katkı Rehberi
+Katkıda bulunmak isterseniz:
 
 CONTRIBUTING.md
 
@@ -197,5 +196,5 @@ CODE_OF_CONDUCT.md
 SECURITY.md
 
 📜 Lisans
-Bu proje MIT Lisansı ile lisanslanmıştır.
+MIT License
 © 2025 Znuzhg Onyvxpv
