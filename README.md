@@ -2,7 +2,7 @@
 **Sürüm:** V1.0.1  
 **Geliştirici:** Znuzhg Onyvxpv  
 **Lisans:** MIT  
-
+“This project was developed with AI assistance. Architecture, problem definition and testing were done by me.”
 ---
 
 ## 📌 Kısa Açıklama
@@ -194,4 +194,5 @@ SECURITY.md
 📜 Lisans
 MIT License
 © 2025 Znuzhg Onyvxpv
+
 
