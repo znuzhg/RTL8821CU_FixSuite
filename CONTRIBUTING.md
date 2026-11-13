@@ -1,81 +1,44 @@
-# Contributing to RTL8821CU_FixSuite
+# Katkı Rehberi
 
-Teşekkürler! Bu projeye katkıda bulunmak istemen harika.  
-RTL8821CU_FixSuite, WSL2 ortamında Realtek 8821CU sürücüsünün otomatik kurulumu ve hata ayıklamasını kolaylaştırmak için oluşturulmuş açık kaynak bir projedir.  
-Aşağıdaki rehber, katkı sürecini netleştirmek ve düzenli bir geliştirme akışı sağlamak için hazırlanmıştır.
+RTL8821CU_FixSuite projesine katkı sağlamak istediğiniz için teşekkürler. Bu belge, hata bildirimleri, kod katkıları ve test sürecini açıklar.
 
----
+## Hata bildirimi
 
-## 📝 Nasıl Katkı Sağlayabilirsin?
+Issue açarken aşağıdaki bilgileri ekleyin:
 
-### 1) Issue Açma
-Aşağıdaki durumlarda bir *Issue* açabilirsin:
-- Hata (bug) bildirimi
-- Yeni özellik önerisi
-- Doküman iyileştirmesi
-- Performans geliştirme önerileri
+- Windows sürümü ve WSL sürümü.
+- WSL dağıtımı ve \`uname -r\` çıktısı.
+- USB adaptörünün VID:PID ve BUSID bilgisi.
+- Çalıştırılan komut ve parametreler.
+- İlgili \`run.log\` ve DKMS \`make.log\` bölümleri.
+- Beklenen ve gerçekleşen davranış.
 
-Issue açarken lütfen açık ve anlaşılır bilgileri ekle:
-- Problemin açıklaması  
-- Reproduce adımları  
-- Beklenen davranış  
-- Ekran görüntüleri / loglar (varsa)
+Log göndermeden önce kullanıcı adı, IP adresi, MAC adresi ve diğer özel bilgileri gözden geçirin.
 
----
+## Pull Request süreci
 
-## 🔧 Pull Request (PR) Gönderme Süreci
+1. Depoyu fork edin.
+2. Tek bir amaca odaklanan dal oluşturun.
+3. Küçük ve anlaşılır commit'ler hazırlayın.
+4. Değişiklikleri mümkün olan en dar kapsamda test edin.
+5. PR açıklamasında değişiklikleri, testleri ve bilinen sınırlamaları belirtin.
 
-Projeye doğrudan katkıda bulunmak için aşağıdaki adımları izle:
+## Kod standartları
 
-1. **Fork** → Projeyi kendi hesabına kopyala  
-2. **Yeni branch oluştur**
-- git checkout -b feature-yeni-ozellik
-3. **Değişikliklerini yap ve commit et**  
-- Temiz ve anlaşılır commit mesajları kullan  
-- Gereksiz dosyaları ekleme (log, cache, vs.)
+- Bash betikleri için \`set -Eeuo pipefail\` kullanın ve \`bash -n\` ile sözdizimini doğrulayın.
+- Mümkünse ShellCheck uyarı seviyesini \`warning\` olarak çalıştırın.
+- PowerShell değişikliklerinde usbipd-win'in güncel komut biçimini koruyun.
+- Yorumları Türkçe yazın.
+- Log, cache, paket kurulum dosyası ve yerel vendor içeriklerini commit etmeyin.
+- Sistem genelinde yükseltme veya paket kaldırma işlemlerini varsayılan davranış yapmayın.
+- Kullanıcı verilerini veya mevcut ayarları onay olmadan silmeyin.
 
-4. **PR Gönder**  
-PR’nı oluştururken:
-- Yaptığın değişiklikleri açıkla  
-- İlgili Issue varsa numarasını yaz  
-- Test ettiğini belirt
+## Güvenlik açıkları
 
----
+Güvenlik sorunlarını herkese açık Issue olarak paylaşmayın. [SECURITY.md](SECURITY.md) dosyasındaki özel bildirim yöntemini kullanın.
 
-## 📐 Kod Standartları
+## Davranış kuralları
 
-Katkı yaparken lütfen aşağıdaki noktalara dikkat et:
+Katılımcılar [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) dosyasındaki kurallara uymalıdır.
 
-- Kod okunabilir olmalı  
-- Gereksiz karmaşıklıktan kaçınılmalı  
-- Yeterli yorum satırı bulunmalı  
-- Değişiklikler mümkün olduğunca modüler yapılmalı  
-- Windows + WSL2 ortamlarında uyumluluk korunmalı  
-
----
-
-## 🔒 Güvenlik Açıkları
-
-Bir güvenlik açığı bulduğunu düşünüyorsan:
-- **Lütfen doğrudan herkese açık bir Issue açma.**
-- Bunun yerine şu adresten özel olarak bildir:
-  znuz@yaani.com
-Güvenlik açıkları titizlikle ve gizlilik içinde ele alınacaktır.
-
----
-
-## 🤝 Davranış Kuralları (Code of Conduct)
-
-Bu projeye katkı sağlayan herkes, aşağıdaki kurallara uymayı kabul etmiş sayılır:
-
-**Contributor Covenant v2.0 Code of Conduct**  
-→ `.github/CODE_OF_CONDUCT.md`
-
-Topluluk içi iletişimde saygı, hoşgörü ve profesyonellik beklenir.
-
----
-
-## 🫶 Teşekkürler!
-
-Proje açık kaynak olarak geliştiriliyor ve katkı sağlayan herkes FixSuite’in daha iyi hale gelmesine yardımcı oluyor.  
-Her türlü katkın değerli ve memnuniyetle karşılanıyor.  
+Teşekkürler!

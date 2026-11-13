@@ -1,60 +1,39 @@
-# Security Policy
+# Güvenlik Politikası
 
-## Supported Versions
+## Desteklenen sürüm
 
-Bu bölüm, projenin hangi sürümlerinin güvenlik güncellemeleri aldığı hakkında bilgi verir.  
-FixSuite aktif olarak geliştirilen bir projedir ve aşağıdaki sürümler desteklenmektedir:
+| Sürüm | Destek |
+|---|---|
+| \`main\` dalındaki güncel sürüm | Bakım kapsamındadır |
+| Önceki commit'ler ve etiketlenmemiş eski sürümler | Ayrı bir destek taahhüdü yoktur |
 
-| Version   | Supported          |
-|---------- | ------------------ |
-| 2025.x.x  | :white_check_mark: |
-| 2024.x.x  | :white_check_mark: |
-| 2023.x.x  | :x:                |
-| < 2023    | :x:                |
+Bu depoda henüz resmî sürüm etiketi bulunmayan sürümler için uzun süreli destek garantisi verilmez.
 
-Desteklenen sürümler, kritik hata düzeltmeleri ve güvenlik yamaları almaya devam eder.
+## Güvenlik açığı bildirimi
 
----
+Güvenlik açıklarını herkese açık Issue veya Pull Request olarak yayımlamayın.
 
-## Reporting a Vulnerability
+Bildirimi özel olarak şu e-posta adresine gönderin:
 
-Bir güvenlik açığı bulduğunuzu düşünüyorsanız lütfen aşağıdaki adımları izleyin:
+**znuz@yaani.com**
 
-1. **Açığı herkese açık bir Issue olarak bildirmeyin.**  
-   Bu, kötü niyetli kişiler tarafından kullanılabilir.
+GitHub deposunda özel güvenlik bildirimi özelliği etkinse GitHub'ın “Report a vulnerability” akışını da kullanabilirsiniz.
 
-2. Aşağıdaki iletişim adresine özel olarak e-posta gönderin:  
-- znuz@yaani.com
-3. Mümkünse şu bilgileri ekleyin:
-- Açığın detaylı açıklaması  
-- Etkilenen dosya veya fonksiyon  
-- Reproduce adımları  
-- Çözüm önerisi veya patch taslağı (varsa)
+Bildirime mümkün olduğunda şunları ekleyin:
 
----
+- Etkilenen dosya, fonksiyon ve commit.
+- Sorunun teknik açıklaması.
+- Yeniden üretme adımları.
+- Etki ve gerekli koşullar.
+- Varsa güvenli çözüm önerisi.
 
-## What to Expect
+## İnceleme süreci
 
-Bir güvenlik açığı bildirdiğinizde:
+Bildirim alındığında sorun doğrulanır, etkisi değerlendirilir ve uygun bir düzeltme hazırlanır. İnceleme süresi sorunun karmaşıklığına ve bakım kapasitesine bağlıdır; önceden garanti edilmiş bir yanıt veya çözüm süresi yoktur.
 
-- Mesajınız **48 saat içinde** alınır ve işleme alınır.  
-- 3–7 gün içinde açığın durumu hakkında geri dönüş yapılır.  
-- Açık doğrulanırsa:
-- Çözüm için bir yama hazırlanır  
-- Yama test edilir  
-- FixSuite’in yeni sürümünde yayınlanır  
-- Sizi süreç boyunca bilgilendirmeye devam ederiz
+## Güvenli kullanım
 
-- Eğer açık kritik görünüyorsa, hızlı bir acil durum güncellemesi çıkarılabilir.
-
----
-
-## Responsible Disclosure
-
-Güvenlik açıklarını sorumlu şekilde bildiren tüm kullanıcılar ve araştırmacılar:
-
-- Tam gizlilik garantisi ile korunur  
-- Açığın düzeltilmesinden sonra teşekkür bölümünde (isterlerse anonim olarak) listelenebilir  
-- Topluluğa katkılarından dolayı saygıyla anılır
-
-Bu politika, FixSuite'in güvenliğini arttırmak ve kullanıcıları korumak için oluşturulmuştur.
+- Logları paylaşmadan önce IP, MAC, hostname ve kullanıcı adı gibi bilgileri temizleyin.
+- Scriptleri çalıştırmadan önce değişiklikleri ve hedef yolları inceleyin.
+- Bilinmeyen sürücü kaynaklarını güvenilirliğini doğrulamadan kurmayın.
+- Üretim veya kritik sistemlerde önce yedek alın ve DRY-RUN çıktısını inceleyin.

@@ -1,198 +1,181 @@
-# 🚀 RTL8821CU FixSuite – WSL2 Wi-Fi Sürücü Aracı  
-**Sürüm:** V1.0.1  
+# RTL8821CU FixSuite – WSL2 Wi-Fi Sürücü Aracı
+
+**Sürüm:** v3  
 **Geliştirici:** Znuzhg Onyvxpv  
-**Lisans:** MIT  
-“This project was developed with AI assistance. Architecture, problem definition and testing were done by me.”
----
+**Lisans:** MIT (FixSuite betikleri ve özgün dosyalar)
 
-## 📌 Kısa Açıklama
+RTL8821CU FixSuite, Realtek RTL8821CU USB Wi-Fi adaptörünün Windows üzerinden WSL2 içindeki Kali, Debian veya Ubuntu dağıtımına bağlanmasını ve Linux sürücüsünün kurulmasını kolaylaştırır.
 
-**RTL8821CU FixSuite**, Windows + WSL2 üzerinde **Realtek RTL8821CU USB Wi-Fi adaptörünü**, usbipd kullanarak WSL içine otomatik bağlayan; DKMS ile derleyip kuran; kalıcı, güvenli ve tamamen otomatik bir çözüm aracıdır.
+Proje, önce Linux çekirdeğinin kendi \`rtw88_8821cu\` sürücüsünü ve firmware'i kullanmayı dener. WSL ortamında firmware bulunamaz veya cihaz çalışmazsa WSL çekirdek kaynağını hazırlar ve \`8821cu\` sürücüsünü DKMS üzerinden kurmayı dener.
 
-Bu araç:
+## Gereksinimler
 
-- ✔ Tek komutla sürücü kurar  
-- ✔ WSL2 içinde Wi-Fi adaptörünü sorunsuz kullanmanızı sağlar  
-- ✔ usbipd, DKMS ve kernel source adımlarını otomatik yönetir  
-- ✔ Otomatik düzeltme mekanizmasına sahiptir  
-- ✔ Off-line mod ile internetsiz ortamda bile kurulabilir  
+- Windows 10/11 ve WSL2 kurulumu.
+- WSL2 üzerinde Kali Linux, Debian veya Ubuntu.
+- Windows tarafında usbipd-win.
+- Sürücü kurulumu için WSL içinde root/\`sudo\` yetkisi.
+- DKMS yolu için internet bağlantısı (kaynakları indirmek için) veya önceden hazırlanmış yerel kaynak.
+- \`git\`, \`dkms\`, \`build-essential\`, \`make\` ve çekirdek derleme bağımlılıkları.
 
----
+Windows tarafında usbipd-win'i kurmak için yönetici PowerShell'de:
 
-## 🔥 Özellikler
+\`\`\`powershell
+winget install --interactive --exact dorssel.usbipd-win
+\`\`\`
 
-| Özellik | Açıklama |
-|--------|----------|
-| 🔌 USBIPD otomasyonu | Windows → WSL arası bind / detach / attach işlemleri |
-| ⚡ usbipd 5.3+ desteği | `usbipd attach --wsl` sözdizimi, eski sürümler için fallback |
-| 🛠️ DKMS derleme akışı | `add → build → install` + yaygın hatalar için otomatik düzeltme |
-| 🔁 Kalıcılık | `modules-load`, `udev rules`, `wsl.conf` birleştirme ve autoload |
-| 🌐 Off-line mod | `--no-network` ile apt ve git clone adımlarını atlar |
-| 🧠 AI log analizi | `ai_helper.py summarize` ile JSON özet ve hata analizi |
-| 📦 Kernel source fallback | Headers yoksa WSL kernel source indirip hazırlama |
-| 🔄 İdempotent betikler | Betikler güvenle tekrar tekrar çalıştırılabilir |
+Winget kullanılamıyorsa resmi sürümler: [dorssel/usbipd-win Releases](https://github.com/dorssel/usbipd-win/releases).
 
----
+## Kurulum ve kullanım
 
-## 📂 Proje Klasör Yapısı
+### 1. Depoyu WSL içine alın
 
-Aşağıdaki tablo FixSuite içindeki dosya ve klasörlerin işlevlerini gösterir:
+Örnek:
 
-| Klasör / Dosya | Açıklama |
-|----------------|----------|
-| `setup.ps1` | Windows tarafı usbipd yönetimi, bind / detach / attach, loglama |
-| `update.sh` | WSL bağımlılık kurulumu, headers kontrolü, off-line mod |
-| `rtl8821cu_wsl_fix.sh` | DKMS derleme, kernel source fallback, kalıcılık ayarları |
-| `ai_helper.py` | Log → JSON özetleme ve hata analizi |
-| `logs/` | Windows & WSL logları, `latest` sembolik bağlantısı |
-| `README.md` | Bu dokümantasyon dosyası |
+\`\`\`bash
+git clone https://github.com/znuzhg/RTL8821CU_FixSuite.git
+cd RTL8821CU_FixSuite
+\`\`\`
 
----
+### 2. Bağımlılıkları hazırlayın
 
-## 🖥️ Desteklenen Sistemler
+\`\`\`bash
+sudo bash update.sh
+\`\`\`
 
-- Windows 10 / 11  
-- WSL2 (Kali Linux, Ubuntu, Debian)  
-- usbipd-win **5.3+**  
-- Windows tarafında **Admin PowerShell**  
-- WSL tarafında **root/sudo** yetkisi  
+İnternet kullanmadan yalnızca mevcut paketleri kontrol etmek için:
 
----
-
-## 🚀 Kurulum (Adım Adım Kılavuz)
-
-### 1️⃣ WSL içinde proje dizinine gidin
-
-```bash
-cd /mnt/c/Users/<kullanıcı>/Downloads/RTL8821CU_FixSuite/
-2️⃣ update.sh ile bağımlılıkları yükleyin
-bash
-Kodu kopyala
-sudo DEBIAN_FRONTEND=noninteractive bash update.sh
-Ağ yoksa:
-
+\`\`\`bash
 sudo bash update.sh --no-network
-Headers bulunmazsa betik uyarır ve kernel source fallback ile devam eder.
+\`\`\`
 
-3️⃣ Windows tarafında setup.ps1 çalıştırın (Admin)
-powershell
+\`update.sh\` sistem genelinde \`apt-get upgrade\` çalıştırmaz. Yalnızca FixSuite'in ihtiyaç duyduğu eksik paketleri kurar. \`autoremove\` varsayılan olarak kapalıdır; açıkça istendiğinde \`--autoremove\` kullanılır.
 
-cd C:\Users\<kullanıcı>\Downloads\RTL8821CU_FixSuite
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Unblock-File -Path .\setup.ps1
-Çalıştırın:
+### 3. USB adaptörünü Windows'tan WSL'e bağlayın
 
-powershell
+PowerShell'i yönetici olarak açın ve cihazları listeleyin:
 
-.\setup.ps1 -AutoAttach -DistroName "kali-linux" -BusId "2-13" -Force -Verbose
-Notlar:
-
-BusId verilmezse script Realtek cihazını otomatik bulur
-
-“Not shared” → otomatik usbipd bind
-
-“Attached” → otomatik usbipd detach
-
-usbipd ≥ 5.3 → usbipd attach --wsl
-
-Eski sürüm → fallback usbipd attach --busid
-
-4️⃣ WSL içinde sürücüyü kurun
-bash
-
-sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
-Off-line mod:
-
-bash
-
-sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix --no-network
-🔌 USBIPD Komut Özeti
-powershell
-
-# Cihazları listele
+\`\`\`powershell
 usbipd list
+\`\`\`
 
-# Paylaşıma aç
-usbipd bind --busid 2-13
+RTL8821CU cihazının BUSID değerini kullanarak cihazı paylaşın:
 
-# WSL'e bağla
-usbipd attach --busid 2-13 --wsl kali-linux
+\`\`\`powershell
+usbipd bind --busid <ID>
+\`\`\`
 
-# Varsayılan distro ile bağla
-usbipd attach --busid 2-13
+Ardından WSL'e bağlayın:
 
-# Bağlantıyı kes
-usbipd detach --busid 2-13
-📌 WSL yeniden başlatıldığında (wsl --shutdown) cihazı tekrar bağlamanız gerekir:
+\`\`\`powershell
+usbipd attach --wsl --busid <ID>
+\`\`\`
 
-powershell
+Otomatik yeniden bağlanma seçeneği desteklenen usbipd-win sürümlerinde:
 
-usbipd.exe attach --busid --wsl <DISTRO_NAME>
-📄 Loglama
+\`\`\`powershell
+usbipd attach --wsl --busid <ID> --auto-attach
+\`\`\`
 
-Windows logları:
-logs\YYYYmmdd_HHMMSS\setup.log
+Bağlantıyı ayırmak için:
 
-WSL logları:
-bash
+\`\`\`powershell
+usbipd detach --busid <ID>
+\`\`\`
 
-logs/YYYYmmdd_HHMMSS/run.log
-logs/latest
-AI ile log özetleme:
+\`detach\` komutunda \`--wsl\` kullanılmaz.
 
-bash
+İsteğe bağlı olarak proje içindeki PowerShell betiği de kullanılabilir:
 
-python3 ai_helper.py summarize logs/latest/run.log
-🟢 Kurulum Kontrolü
-Cihaz görünüyor mu?
+\`\`\`powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+Unblock-File .\\setup.ps1
+.\\setup.ps1 -AutoAttach
+\`\`\`
 
-bash
+Betiğe \`-BusId <ID>\` veya \`-DistroName <dağıtım>\` verilebilir. BUSID belirtilmezse betik \`0bda:c811\` VID:PID değerine göre Realtek cihazını bulmayı dener.
 
-lsusb | grep -i 0bda:c811
-Modül yüklü mü?
+### 4. WSL içinde sürücüyü kurun
 
-bash
+Önce DRY-RUN ile planlanan işlemleri inceleyin:
 
-lsmod | grep '^8821cu'
-modinfo 8821cu
-Arayüz aktif mi?
+\`\`\`bash
+sudo bash rtl8821cu_wsl_fix.sh
+\`\`\`
 
-bash
+Gerçek kurulum:
 
+\`\`\`bash
+sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
+\`\`\`
+
+Varsayılan davranış DRY-RUN'dır. DRY-RUN sırasında sistem paketleri, sürücüler veya yapılandırma dosyaları değiştirilmez; çalışma logları yine de oluşturulur.
+
+## Script parametreleri
+
+| Parametre | Açıklama |
+|---|---|
+| \`--run\` | Gerçek işlemleri uygular. |
+| \`--dry-run\` | Komutları simüle eder. Varsayılandır. |
+| \`--auto-fix\` | DKMS hataları için otomatik düzeltme adımlarını dener. |
+| \`--force-manual\` | DKMS başarısız olursa manuel derlemeye geçer. |
+| \`--force-dkms\` | Firmware/çekirdek içi sürücü yolu çalışsa bile DKMS yolunu da dener. |
+| \`--skip-firmware\` | Firmware ve çekirdek içi sürücü adımını atlar. |
+| \`--no-network\` | Ana scriptte apt/git ağ erişimini kapatır; eksik yerel kaynaklar kendiliğinden sağlanmaz. |
+| \`--log-dir PATH\` | Log dizinini belirler. |
+| \`--project-root PATH\` | Proje kök dizinini belirler. |
+| \`-h\`, \`--help\` | Yardımı gösterir. |
+
+Bağımlılık aracı \`update.sh\` parametreleri:
+
+| Parametre | Açıklama |
+|---|---|
+| \`--no-network\` | Ağ erişimini kullanmaz; eksik paket varsa hata verir. |
+| \`--autoremove\` | İsteğe bağlı apt autoremove temizliğini çalıştırır. Varsayılan değildir. |
+| \`-h\`, \`--help\` | Yardımı gösterir. |
+
+## Çalışma akışı
+
+1. **Firmware ve çekirdek içi sürücü:** \`firmware-realtek\` veya uygun firmware paketini kontrol eder, \`rtw88_8821cu\` sürücüsünü dener ve USB cihazını resetler.
+2. **WSL çekirdek kaynağı ve DKMS:** Uygun çekirdek ağacını arar. Uygun ağaç yoksa WSL çekirdek kaynağını hazırlar, sürücü kaynağını alır ve DKMS ile derleyip kurar.
+3. **Manuel fallback:** DKMS başarısız olursa ve \`--force-manual\` verilmişse manuel derleme denenir.
+
+## WSL2 hakkında önemli notlar
+
+- WSL çekirdeği güncellenirse sürücü modülü yeni çekirdek için yeniden hazırlanmalıdır. Güncellemeden sonra scripti tekrar çalıştırın.
+- \`modules_prepare\` tek başına her WSL çekirdeği için tam \`Module.symvers\` üretmeyebilir. Bu nedenle \`no symbol version for module_layout\` ve \`taints kernel\` gibi mesajlar bazı derlemelerde görülebilir. Bu mesajlar tek başına sürücünün çalışmadığını kanıtlamaz; DKMS sonucu, \`modprobe\`, arayüzün oluşması ve gerçek bağlantı ayrıca doğrulanmalıdır.
+- Linux çekirdeği 6.12 ve üzerini kullanan standart dağıtımlarda morrownr/8821cu belgesi çekirdeğin kendi \`rtw88\` sürücüsünü önerir. FixSuite de önce çekirdek içi sürücüyü dener. WSL ortamında firmware'e erişim sorunu yaşanırsa DKMS yedek yolunu kullanır.
+- Her \`wsl --shutdown\` sonrasında USB cihazının WSL'e yeniden bağlanması gerekir. Bunun için \`usbipd attach --wsl --busid <ID>\` veya desteklenen sürümlerde \`--auto-attach\` kullanın. \`--auto-forward\`, USB cihazı bağlama seçeneği değildir.
+- \`--no-network\` yalnızca ağ işlemlerini atlar; gerekli paketlerin ve kaynakların önceden mevcut olmasını gerektirir.
+
+## Doğrulama ve sorun giderme
+
+WSL içinde:
+
+\`\`\`bash
+lsusb | grep -i '0bda:c811'
+dmesg | grep -Ei 'rtw|8821'
+iw dev
 ip -br link
-rfkill list
-Gerekirse:
+modinfo 8821cu
+lsmod | grep '^8821cu'
+\`\`\`
 
-bash
+Cihaz \`lsusb\` çıktısında görünmüyorsa önce Windows tarafında \`usbipd list\` ve \`usbipd attach\` durumunu kontrol edin. Cihaz görünüyor ancak kablosuz arayüz oluşmuyorsa log dosyasını ve güncel kernel mesajlarını inceleyin.
 
-sudo ip link set wlan0 up
-rfkill unblock all
-❗ Sık Karşılaşılan Hatalar
-Hata	Sebep	Çözüm
-usbipd bulunamadı	usbipd-win kurulu değil	winget install dorssel.usbipd-win
-Cihaz "Not shared"	Paylaşım aktif değil	usbipd bind --busid 2-13
-DKMS build failed	Eksik semboller veya kaynak	rtl8821cu_wsl_fix.sh --run --auto-fix
-linux-headers yok	WSL kernel paketi mevcut değil	Kernel source fallback otomatik devreye girer
-WLAN görünmüyor	Cihaz bağlanmamış / WSL kapalı	wsl --shutdown → tekrar attach
+Çalışma logları proje dizininde \`logs/<zaman-damgası>/run.log\` altında tutulur. Son çalışma için \`logs/latest/run.log\` bağlantısı kullanılır. JSON özet:
 
-🔐 Güvenlik
-Betikler tamamen idempotent çalışır
+\`\`\`bash
+python3 ai_helper.py summarize logs/latest/run.log
+\`\`\`
 
-Off-line mod, internet olmayan ortamlarda kullanım içindir
+DKMS derleme logları DKMS tarafından \`/var/lib/dkms/8821cu/\` altında tutulur.
 
-Hiçbir kullanıcı verisi toplanmaz
+## Lisans ve harici sürücü
 
-🤝 Katkı Rehberi
-Katkıda bulunmak isterseniz:
+FixSuite'in kendi betikleri ve dokümantasyonu MIT lisansı kapsamındadır. Betik, sürücü kaynağını gerektiğinde [morrownr/8821cu-20210916](https://github.com/morrownr/8821cu-20210916) deposundan indirir. Bu harici sürücü GPL-2.0 lisanslıdır ve kendi lisans koşullarına tabidir. Sürücü kaynak kodu bu depoya vendor olarak eklenmez.
 
-CONTRIBUTING.md
+## Sorumluluk reddi
 
-CODE_OF_CONDUCT.md
+Bu proje olduğu gibi sunulur. Donanım, WSL çekirdeği, dağıtım ve sürücü sürümüne göre sonuçlar değişebilir. Sistem dosyalarında değişiklik yapılmadan önce logları inceleyin ve önemli verilerin yedeğini alın. Proje, veri kaybı, donanım arızası veya kullanım kaynaklı diğer zararlardan sorumlu tutulamaz.
 
-SECURITY.md
-
-📜 Lisans
-MIT License
-© 2025 Znuzhg Onyvxpv
-
-
+Katkı ve güvenlik bildirimi için [CONTRIBUTING.md](CONTRIBUTING.md) ve [SECURITY.md](SECURITY.md) dosyalarına bakın.
