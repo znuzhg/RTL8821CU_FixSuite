@@ -395,7 +395,10 @@ function Attach-RTL8821CU {
 
             # If Not shared, bind first (required for attach)
             if ($target.State -eq 'Not shared') {
-                Write-Host "[INFO] Device not shared — binding..." -ForegroundColor Yellow
+                if (-not (Test-Admin)) {
+                    throw "Cihazı paylaşmak için yönetici PowerShell yetkisi gerekiyor. Betiği yönetici olarak yeniden çalıştırın."
+                }
+                Write-Host "[BİLGİ] Cihaz paylaşımda değil; bind uygulanıyor..." -ForegroundColor Yellow
                 & usbipd.exe bind --busid $BusId | Out-Null
                 if ($LASTEXITCODE -ne 0) {
                     throw "usbipd bind başarısız oldu. Yönetici PowerShell ile usbipd list ve bind --busid $BusId komutlarını kontrol edin."
