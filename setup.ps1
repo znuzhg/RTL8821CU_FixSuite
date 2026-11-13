@@ -397,32 +397,60 @@ function Attach-RTL8821CU {
             if ($target.State -eq 'Not shared') {
                 Write-Host "[INFO] Device not shared — binding..." -ForegroundColor Yellow
                 & usbipd.exe bind --busid $BusId | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "usbipd bind başarısız oldu. Yönetici PowerShell ile usbipd list ve bind --busid $BusId komutlarını kontrol edin."
+                }
                 Start-Sleep -Seconds 1
             }
             # Detach if already attached
             if ($target.State -eq 'Attached') {
                 Write-Host "[INFO] Device already attached - detaching first..." -ForegroundColor Yellow
                 & usbipd.exe detach --busid $BusId | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "usbipd detach başarısız oldu. Cihazın durumunu usbipd list ile kontrol edin."
+                }
                 Start-Sleep -Seconds 2
             }
 
-            # Attach to WSL
-            Write-Host "[INFO] Attaching device $BusId to WSL..." -ForegroundColor Cyan
-            $attachCmd = @('attach','--busid', $BusId)
-            $useWslSwitch = $true
-            $distroToUse = if ($DistroName) { $DistroName } else { Get-DefaultDistro }
-            if ($distroToUse) { $attachCmd += @('--wsl', $distroToUse) }
-            $attachOut = & usbipd.exe @attachCmd 2>&1 | Tee-Object -Variable attachOut
-            $exit = $LASTEXITCODE
-            if ($exit -ne 0 -or ($attachOut -match 'unrecognized option|unknown option|has been removed')) {
-                Write-Log -Level 'WARN' -Message "--wsl attach failed; falling back to default attach." -Data @{ exit=$exit; output=$attachOut }
-                $attachCmd = @('attach','--busid', $BusId)
-                $attachOut = & usbipd.exe @attachCmd 2>&1 | Tee-Object -Variable attachOut
+            # WSL'e güncel usbipd-win sözdizimiyle bağlan
+            Write-Host "[BİLGİ] Cihaz WSL'e bağlanıyor: $BusId" -ForegroundColor Cyan
+            $attachCmd = @('attach', '--wsl', '--busid', $BusId)
+
+            if ($AutoAttach) {
+                # Sürekli yeniden bağlanma işlemi ana betiği bloke etmesin diye arka planda başlatılır.
+                $attachCmd += '--auto-attach'
+                $usbipdPath = (Get-Command usbipd.exe -ErrorAction Stop).Source
+                $autoOut = Join-Path $env:TEMP ("rtl8821cu-usbipd-" + [Guid]::NewGuid().ToString('N') + ".out")
+                $autoErr = "$autoOut.err"
+                $autoProcess = Start-Process -FilePath $usbipdPath -ArgumentList $attachCmd -WindowStyle Hidden -PassThru -RedirectStandardOutput $autoOut -RedirectStandardError $autoErr
+                Start-Sleep -Seconds 2
+                $autoProcess.Refresh()
+
+                if ($autoProcess.HasExited -and $autoProcess.ExitCode -ne 0) {
+                    $autoMessage = @()
+                    if (Test-Path $autoOut) { $autoMessage += Get-Content -LiteralPath $autoOut -Raw }
+                    if (Test-Path $autoErr) { $autoMessage += Get-Content -LiteralPath $autoErr -Raw }
+                    Write-Log -Level 'WARN' -Message "usbipd --auto-attach başlatılamadı; normal WSL bağlantısı deneniyor." -Data @{ output = ($autoMessage -join "`n") }
+
+                    $attachCmd = @('attach', '--wsl', '--busid', $BusId)
+                    $attachOut = & usbipd.exe @attachCmd 2>&1
+                    $exit = $LASTEXITCODE
+                    if ($exit -ne 0) {
+                        throw "usbipd attach --wsl başarısız oldu: $attachOut"
+                    }
+                    Write-Log -Level 'WARN' -Message "Cihaz bağlandı ancak otomatik yeniden bağlanma etkinleştirilemedi."
+                } else {
+                    $attachOut = "usbipd otomatik bağlanma işlemi başlatıldı (PID: $($autoProcess.Id))."
+                    Write-Log -Level 'INFO' -Message $attachOut
+                }
+
+                Remove-Item -LiteralPath $autoOut, $autoErr -Force -ErrorAction SilentlyContinue
+            } else {
+                $attachOut = & usbipd.exe @attachCmd 2>&1
                 $exit = $LASTEXITCODE
-            }
-            
-            if ($exit -ne 0) {
-                throw "Attach failed: $attachOut"
+                if ($exit -ne 0) {
+                    throw "usbipd attach --wsl başarısız oldu: $attachOut"
+                }
             }
             
             Write-Log -Level 'INFO' -Message "Device attached to WSL" -Data @{ 
@@ -851,31 +879,37 @@ function Show-Help {}
      } catch { Write-Log -Level 'WARN' -Message "Feature enable failed" -Data @{ feature=$f; error="$($_.Exception.Message)" } }
    }
 
-   # Install usbipd-win via winget with GitHub fallback
+   # usbipd-win'i winget veya resmi GitHub sürüm sayfasından kur
    if (-not (Get-Command usbipd.exe -ErrorAction SilentlyContinue)) {
-     if (Confirm-Action -Message "Install usbipd-win via winget?" -DefaultYes) {
+     if (Confirm-Action -Message "usbipd-win kurulsun mu?" -DefaultYes) {
        try {
          if (Get-Command winget -ErrorAction SilentlyContinue) {
-           if ($PSCmdlet.ShouldProcess("usbipd-win", "winget install dorssel.usbipd-win")) {
-             winget install dorssel.usbipd-win -e --accept-source-agreements --accept-package-agreements -h | Out-Null
-             Write-Log -Level 'INFO' -Message "usbipd-win installation attempted via winget"
+           if ($PSCmdlet.ShouldProcess("usbipd-win", "winget install --interactive --exact dorssel.usbipd-win")) {
+             winget install --interactive --exact dorssel.usbipd-win
+             if ($LASTEXITCODE -ne 0) {
+               throw "winget usbipd-win kurulumunu tamamlayamadı (çıkış kodu: $LASTEXITCODE)."
+             }
+             Write-Log -Level 'INFO' -Message "usbipd-win winget üzerinden kuruldu."
            }
          } else {
-           Write-Log -Level 'WARN' -Message "winget not found; trying GitHub MSI"
+           Write-Log -Level 'WARN' -Message "winget bulunamadı; resmi usbipd-win sürüm paketinden kurulum deneniyor."
            $url = "https://github.com/dorssel/usbipd-win/releases/latest/download/usbipd-win_x64.msi"
            $msi = Join-Path $env:TEMP "usbipd-win.msi"
            Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
            $proc = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
-           if ($proc.ExitCode -ne 0) { throw "msiexec exit code $($proc.ExitCode)" }
+           if ($proc.ExitCode -ne 0) {
+             throw "usbipd-win MSI kurulumu başarısız oldu (çıkış kodu: $($proc.ExitCode))."
+           }
            Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
-           Write-Log -Level 'INFO' -Message "usbipd-win installation via MSI completed"
+           Write-Log -Level 'INFO' -Message "usbipd-win resmi MSI paketiyle kuruldu."
          }
        } catch {
-         Write-Log -Level 'ERROR' -Message "usbipd-win installation failed" -Data @{ error="$($_.Exception.Message)" }
+         Write-Log -Level 'ERROR' -Message "usbipd-win kurulamadı: $($_.Exception.Message)" -Data @{ error="$($_.Exception.Message)" }
+         throw
        }
      }
    } else {
-     Write-Log -Level 'INFO' -Message "usbipd-win already installed"
+     Write-Log -Level 'INFO' -Message "usbipd-win zaten kurulu."
    }
 
    # Start usbipd service if available
