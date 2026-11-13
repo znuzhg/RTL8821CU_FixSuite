@@ -1,0 +1,13 @@
+# Çalışma logları (hostname, IP, MAC bilgisi içerir)
+logs/
+PATCHES_APPLIED
+*.bak
+*.bak.*
+*.empty.*
+
+# Script gerektiğinde indirir/klonlar; repoya girmemeli
+vendor/
+*.msi
+
+__pycache__/
+*.pyc
