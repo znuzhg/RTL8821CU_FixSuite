@@ -1,254 +1,353 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # ============================================================
-#  🔧 RTL8821CU WSL2 FIX TOOL — HELP & DOCUMENTATION
+#  RTL8821CU WSL2 FIX TOOL (v3)
 # ============================================================
-#  Amaç:
-#    WSL2 (Debian/Ubuntu/Kali) altında Realtek RTL8821CU kablosuz sürücüsünü
-#    DKMS üzerinden derleyip yükler. Tüm süreç idempotent (tekrarlanabilir)
-#    olacak şekilde tasarlanmıştır.
-#
-#  Özellikler:
-#    • Otomatik bağımlılık kontrolü (apt-get ile)
-#    • Kernel kaynaklarını hazırlama ve DKMS entegrasyonu
-#    • Yerel veya uzak sürücü kaynağını kullanma
-#    • Otomatik hata tespiti ve düzeltme (--auto-fix)
-#    • Manuel fallback derleme (--force-manual)
-#    • Ağsız kurulum desteği (--no-network)
-#    • Log takibi, özet üretimi (ai_helper.py üzerinden JSON)
+#  Strateji:
+#    1) Çekirdeğin kendi rtw88_8821cu sürücüsü için firmware'i kur ve cihazı resetle.
+#       (WSL'de çekirdek firmware'i bazen bulamaz; olmazsa otomatik 2. adıma geçilir.)
+#    2) Olmazsa: WSL çekirdek kaynağını hazırla, 8821cu sürücüsünü DKMS ile derle.
+#    3) DKMS de olmazsa --force-manual ile manuel derleme.
 #
 #  Kullanım:
-#    sudo bash rtl8821cu_wsl_fix.sh [--run|--dry-run] [--auto-fix] [--force-manual] [--no-network] [--log-dir <path>]
+#    sudo bash rtl8821cu_wsl_fix.sh [--run|--dry-run] [--auto-fix] [--force-manual]
+#                                   [--force-dkms] [--skip-firmware] [--no-network]
+#                                   [--log-dir PATH] [--project-root PATH]
 #
 #  Parametreler:
-#    --run            Gerçek işlemleri yürütür (varsayılan dry-run)
-#    --dry-run        Sadece komutları simüle eder, sistem değişmez
-#    --auto-fix       DKMS hatalarını otomatik çözmeyi dener
-#    --force-manual   DKMS başarısızsa manuel derleme moduna geçer
-#    --no-network     Ağ erişimini kapatır (yerel kaynaklarla çalışır)
-#    --log-dir PATH   Log’ların özel dizine kaydedilmesini sağlar
-#    --project-root   Proje kök dizinini manuel belirtir (varsayılan: script’in bulunduğu klasör)
-#    -h, --help       Yardım mesajını gösterir
+#    --run             Gerçek işlemleri yapar (varsayılan: dry-run)
+#    --dry-run         Sadece simüle eder
+#    --auto-fix        DKMS hatalarını otomatik düzeltmeyi dener
+#    --force-manual    DKMS başarısızsa manuel derleme yapar
+#    --force-dkms      Firmware yolu çalışsa bile DKMS yolunu da dener
+#    --skip-firmware   Firmware adımını atlar, doğrudan DKMS
+#    --no-network      Ağ/apt/git kullanmaz
+#    --log-dir PATH    Log dizini
+#    --project-root P  Proje kök dizini
+#    -h, --help        Yardım
 #
-#  Örnekler:
+#  Örnek:
 #    sudo bash rtl8821cu_wsl_fix.sh --run --auto-fix
-#    sudo bash rtl8821cu_wsl_fix.sh --run --force-manual
-#    sudo bash rtl8821cu_wsl_fix.sh --dry-run
-#
-#  Log ve Özetleme:
-#    - Çalışma logları: TARGET_DIR/logs/<timestamp>/run.log
-#    - DKMS log: /var/lib/dkms/8821cu/<version>/build/make.log
-#    - Otomatik özetleme: ai_helper.py summarize logs/latest/run.log
-#
-#  Not:
-#    Bu script güvenli biçimde tekrar çalıştırılabilir.
-#    Hata durumunda log’ları ve ai_helper.py çıktısını inceleyin.
 # ============================================================
 
-# --- Realtek RTL8821CU WSL2 Fix Tool (Main Implementation) ---
 SCRIPT_NAME="$(basename "$0")"
 START_TS="$(date +%Y%m%d_%H%M%S)"
 
-_abs_path() {
-  local p="$1"
-  if command -v readlink >/dev/null 2>&1; then
-    readlink -f "$p" 2>/dev/null || python3 - "$p" <<'PY'
-import os,sys
-print(os.path.abspath(sys.argv[1]))
-PY
-  else
-    python3 - "$p" <<'PY'
-import os,sys
-print(os.path.abspath(sys.argv[1]))
-PY
-  fi
-}
+_abs_path() { readlink -f "$1" 2>/dev/null || realpath "$1" 2>/dev/null || echo "$1"; }
 
 THIS_PATH="$(_abs_path "$0")"
 TARGET_DIR="$(dirname "$THIS_PATH")"
-
-# Automatically detect project root if not provided via environment
-PROJECT_ROOT="${PROJECT_ROOT:-$(dirname "$(_abs_path "$0")")}"
-
-if [[ ! -d "$PROJECT_ROOT" ]]; then
-  echo "[WARN] PROJECT_ROOT not found: $PROJECT_ROOT"
-  PROJECT_ROOT="$(dirname "$(_abs_path "$0")")"
-  echo "[INFO] Fallback PROJECT_ROOT=$PROJECT_ROOT"
-fi
+PROJECT_ROOT="${PROJECT_ROOT:-$TARGET_DIR}"
 
 RUN_MODE=0
 AUTO_FIX=0
 FORCE_MANUAL=0
+FORCE_DKMS=0
+SKIP_FIRMWARE=0
 NO_NETWORK=0
 USER_LOG_DIR=""
 
+USB_VID="0bda"
+USB_PID="c811"
+KVER="$(uname -r)"
+WSL_SRC_DIR="/usr/src/wsl-kernel-src"
+
 usage() {
   cat <<EOF
-Usage: sudo bash $SCRIPT_NAME [--dry-run|--run] [--auto-fix] [--force-manual] [--log-dir <path>] [--no-network]
-  --run            Execute full build process
-  --dry-run        Simulate steps (default)
-  --auto-fix       Try to automatically fix DKMS issues
-  --force-manual   Perform manual build if DKMS fails
-  --no-network     Disallow any network cloning
-  --log-dir PATH   Custom log directory
+Kullanım: sudo bash $SCRIPT_NAME [--run|--dry-run] [--auto-fix] [--force-manual]
+                                 [--force-dkms] [--skip-firmware] [--no-network]
+                                 [--log-dir PATH] [--project-root PATH]
+  --run             Gerçek işlemleri yapar (varsayılan dry-run)
+  --dry-run         Sadece simüle eder
+  --auto-fix        DKMS hatalarını otomatik düzeltmeyi dener
+  --force-manual    DKMS başarısızsa manuel derleme
+  --force-dkms      Firmware yolu çalışsa bile DKMS'i dener
+  --skip-firmware   Firmware adımını atlar
+  --no-network      Ağ erişimi yok (apt/git kapalı)
+  --log-dir PATH    Özel log dizini
+  --project-root P  Proje kök dizini
 EOF
 }
 
-# Parse CLI args
 while [[ $# -gt 0 ]]; do
-  case "${1}" in
+  case "$1" in
     --run) RUN_MODE=1; shift ;;
     --dry-run) RUN_MODE=0; shift ;;
     --auto-fix) AUTO_FIX=1; shift ;;
-    --force-manual) FORCE_MANUAL=1; shift ;;
+    --force-manual|--force-manuel) FORCE_MANUAL=1; shift ;;
+    --force-dkms) FORCE_DKMS=1; shift ;;
+    --skip-firmware) SKIP_FIRMWARE=1; shift ;;
     --no-network) NO_NETWORK=1; shift ;;
-    --log-dir) USER_LOG_DIR="${2:-}"; shift 2 ;;
-    --project-root) PROJECT_ROOT="$2"; shift 2 ;;
+    --log-dir)
+      [[ $# -ge 2 ]] || { echo "[ERROR] --log-dir bir yol ister"; exit 2; }
+      USER_LOG_DIR="$2"; shift 2 ;;
+    --project-root)
+      [[ $# -ge 2 ]] || { echo "[ERROR] --project-root bir yol ister"; exit 2; }
+      PROJECT_ROOT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "[WARN] Unknown option: $1"; shift ;;
+    *) echo "[ERROR] Bilinmeyen parametre: $1"; usage; exit 2 ;;
   esac
 done
 
-# Logging setup
+if [[ "$EUID" -ne 0 ]]; then
+  echo "[ERROR] Root olarak çalıştırın: sudo bash $SCRIPT_NAME ..."; exit 1
+fi
+
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+  echo "[WARN] PROJECT_ROOT bulunamadı: $PROJECT_ROOT -> $TARGET_DIR kullanılacak"
+  PROJECT_ROOT="$TARGET_DIR"
+fi
+
+# ---------------- Log ----------------
 LOG_BASE_DIR="$TARGET_DIR/logs"
 mkdir -p "$LOG_BASE_DIR"
-if [[ -n "$USER_LOG_DIR" ]]; then
-  LOG_DIR="$USER_LOG_DIR"
-else
-  LOG_DIR="$LOG_BASE_DIR/$START_TS"
-fi
+LOG_DIR="${USER_LOG_DIR:-$LOG_BASE_DIR/$START_TS}"
 mkdir -p "$LOG_DIR"
-# latest symlink
 ln -sfn "$LOG_DIR" "$LOG_BASE_DIR/latest" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/run.log"
 : >"$LOG_FILE"
-
+DMESG_BASELINE_FILE="$LOG_DIR/dmesg.before"
+if command -v dmesg >/dev/null 2>&1; then
+  dmesg --raw 2>/dev/null >"$DMESG_BASELINE_FILE" || true
+fi
 export RTL8821CU_WSL_TARGET="$TARGET_DIR"
 
-log() {
-  local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$ts] $*" | tee -a "$LOG_FILE"
-}
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
 err_trap() {
-  local ec=$?; log "[ERROR] Script failed with exit code $ec at line $BASH_LINENO. See $LOG_FILE"; exit $ec
+  local ec=$?
+  log "[ERROR] Script hata ile durdu (kod $ec, satır ${BASH_LINENO[0]}). Log: $LOG_FILE"
+  exit "$ec"
 }
 trap err_trap ERR
 trap 'log "[INFO] Exit."' EXIT
 
-# Dry-run helpers
+# ---------------- Yardımcılar ----------------
+# Komutu eval OLMADAN çalıştırır (dry-run'da sadece yazar)
 _do() {
   if [[ "$RUN_MODE" -eq 1 ]]; then
-    log "+ $*"; eval "$@"
+    log "+ $*"
+    "$@"
   else
     log "(dry-run) $*"
   fi
 }
 
-# Sanitize build environment
+# stdin içeriğini dosyaya yazar (dry-run'da yazmaz)
+write_file() {
+  local dest="$1" mode="${2:-0644}" content
+  content="$(cat)"
+  if [[ "$RUN_MODE" -eq 1 ]]; then
+    log "+ write $dest"
+    mkdir -p "$(dirname "$dest")"
+    printf '%s\n' "$content" >"$dest"
+    chmod "$mode" "$dest"
+  else
+    log "(dry-run) write $dest"
+  fi
+}
+
 sanitize_env() {
   unset MAKEFLAGS MAKELEVEL MFLAGS HOSTCFLAGS WERROR NO_WERROR CCACHE_DIR CCACHE_COMPILERCHECK || true
 }
 
-require_root() {
-  if [[ "$EUID" -ne 0 ]]; then
-    log "[ERROR] Please run as root (sudo)."; exit 1
+has_wifi_iface() {
+  local d
+  for d in /sys/class/net/*/wireless; do
+    [[ -e "$d" ]] && return 0
+  done
+  return 1
+}
+
+module_loaded() { grep -q "^$1 " /proc/modules 2>/dev/null; }
+
+find_usb_dev() {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    if [[ "$(cat "$d/idVendor")" == "$USB_VID" && "$(cat "$d/idProduct")" == "$USB_PID" ]]; then
+      echo "$d"; return 0
+    fi
+  done
+  return 1
+}
+
+reset_usb_dev() {
+  local d
+  d="$(find_usb_dev)" || { log "[WARN] USB cihaz ($USB_VID:$USB_PID) WSL içinde görünmüyor. Windows'ta 'usbipd attach --wsl --busid <ID>' yapın."; return 1; }
+  log "[INFO] USB cihaz resetleniyor: $d"
+  _do bash -c "echo 0 > '$d/authorized'; sleep 1; echo 1 > '$d/authorized'" || true
+}
+
+wait_for_wifi() {
+  [[ "$RUN_MODE" -eq 1 ]] || return 1
+  local i
+  for i in $(seq 1 12); do
+    has_wifi_iface && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------- dpkg onarımı (yarım kalan nvidia-kernel-dkms vb.) ----------------
+heal_dpkg() {
+  local st
+  st="$(dpkg-query -W -f='${db:Status-Abbrev}' nvidia-kernel-dkms 2>/dev/null || true)"
+  if [[ -n "$st" && "$st" != "ii " ]]; then
+    log "[FIX] nvidia-kernel-dkms yarım kurulmuş (durum: '$st'). WSL'de Linux NVIDIA sürücüsü gerekmez (GPU'yu Windows sürücüsü sağlar); kaldırılıyor."
+    local ent
+    while read -r ent; do
+      [[ -n "$ent" ]] && _do dkms remove "$ent" --all || true
+    done < <(dkms status 2>/dev/null | grep -E '^nvidia' | cut -d, -f1 | cut -d: -f1 | sort -u)
+    _do apt-get purge -y nvidia-kernel-dkms || _do dpkg --purge --force-all nvidia-kernel-dkms || true
+  fi
+  if dpkg --audit 2>/dev/null | grep -q .; then
+    log "[FIX] dpkg yarım paketler var, 'dpkg --configure -a' çalıştırılıyor"
+    _do dpkg --configure -a || true
   fi
 }
 
-# APT readiness (Debian/Ubuntu/Kali)
+# ---------------- apt ----------------
 PKGS=(git dkms build-essential bc flex bison libssl-dev libelf-dev dwarves pkg-config)
 ensure_apt_ready() {
   if ! command -v apt-get >/dev/null 2>&1; then
-    log "[WARN] apt-get not found; skipping package ensure. Ensure required build tools exist."
-    return 0
+    log "[WARN] apt-get yok; paket kontrolü atlandı."; return 0
   fi
   if [[ "$NO_NETWORK" -eq 1 ]]; then
-    log "[INFO] --no-network set; skipping apt-get update/install. Ensure required packages exist."
-    return 0
+    log "[INFO] --no-network: apt atlandı."; return 0
   fi
-  local missing=()
+  local missing=() p
   for p in "${PKGS[@]}"; do
-    if ! dpkg -s "$p" >/dev/null 2>&1; then missing+=("$p"); fi
+    dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p")
   done
   if ((${#missing[@]})); then
     _do apt-get update -y
     _do apt-get install -y "${missing[@]}"
   else
-    log "[OK] Required packages already installed."
+    log "[OK] Gerekli paketler kurulu."
   fi
-  # Try headers, tolerate failure under WSL
-  if ! dpkg -s "linux-headers-$(uname -r)" >/dev/null 2>&1; then
-    _do apt-get install -y "linux-headers-$(uname -r)" || log "[WARN] linux-headers for $(uname -r) not available; will attempt kernel source path."
-  fi
+  # NOT: WSL çekirdeği için linux-headers paketi yoktur; denenmez.
 }
 
-# Kernel source handling
-KERNEL_SRC=""
-prepare_kernel_source() {
-  if [[ -d "/lib/modules/$(uname -r)/build" ]]; then
-    KERNEL_SRC="/lib/modules/$(uname -r)/build"
-    log "[OK] Using kernel build directory: $KERNEL_SRC"
+# ---------------- ADIM 1: Çekirdek içi rtw88 sürücüsü + firmware ----------------
+have_fw() { compgen -G "/lib/firmware/rtw88/rtw8821c_fw.bin*" >/dev/null 2>&1; }
+
+ensure_firmware_path() {
+  log "[STEP1] Çekirdek içi rtw88_8821cu sürücüsü için firmware kontrolü"
+  if ! have_fw; then
+    if [[ "$NO_NETWORK" -eq 1 ]]; then
+      log "[WARN] rtw8821c_fw.bin yok ve --no-network açık; firmware kurulamaz."
+      return 1
+    fi
+    local pkgs=()
+    if apt-cache show firmware-realtek >/dev/null 2>&1; then pkgs+=(firmware-realtek)
+    elif apt-cache show linux-firmware >/dev/null 2>&1; then pkgs+=(linux-firmware); fi
+    dpkg -s wireless-regdb >/dev/null 2>&1 || pkgs+=(wireless-regdb)
+    if ((${#pkgs[@]})); then
+      _do apt-get install -y "${pkgs[@]}" || log "[WARN] Firmware paketi kurulamadı."
+    else
+      log "[WARN] Firmware paketi bulunamadı (firmware-realtek / linux-firmware)."
+    fi
+  else
+    log "[OK] rtw8821c firmware mevcut."
+  fi
+  _do modprobe rtw88_8821cu || true
+  reset_usb_dev || true
+  if wait_for_wifi; then
+    log "[SUCCESS] Wi-Fi arayüzü çekirdek içi sürücüyle geldi (DKMS gerekmedi)."
     return 0
   fi
-  if [[ "$NO_NETWORK" -eq 1 ]]; then
-    log "[ERROR] /lib/modules/.../build missing and --no-network set. Cannot prepare kernel source."
-    return 1
+  return 1
+}
+
+# ---------------- ADIM 2: Çekirdek kaynağı ----------------
+KERNEL_SRC=""
+kernel_tree_ready() {
+  [[ -f "$1/Makefile" && -f "$1/include/generated/autoconf.h" ]] || return 1
+  local rel=""
+  if [[ -f "$1/include/config/kernel.release" ]]; then
+    rel="$(cat "$1/include/config/kernel.release")"; rel="${rel%+}"
+    [[ "$rel" == "$KVER" ]] || return 1   # farklı çekirdek sürümünün ağacı
   fi
-  KERNEL_SRC="/usr/src/wsl-kernel-src"
-  if [[ ! -d "$KERNEL_SRC" ]]; then
-    if [[ "$NO_NETWORK" -eq 1 ]]; then
-      log "[ERROR] Kernel source missing and --no-network set; cannot clone WSL kernel."; return 1
+  return 0
+}
+
+prepare_kernel_source() {
+  local cand
+  for cand in "/lib/modules/$KVER/build" "/usr/src/linux-headers-$KVER" "$WSL_SRC_DIR"; do
+    [[ -d "$cand" ]] || continue
+    if [[ "$cand" == "$WSL_SRC_DIR" && ! -f "$cand/include/config/kernel.release" \
+      && "$(cat "$cand/.built_for_kver" 2>/dev/null || true)" != "$KVER" ]]; then
+      continue
     fi
-    _do git clone --depth 1 https://github.com/microsoft/WSL2-Linux-Kernel.git "$KERNEL_SRC"
-  else
-    log "[INFO] Reusing existing kernel source at $KERNEL_SRC"
+    if kernel_tree_ready "$cand"; then
+      KERNEL_SRC="$(_abs_path "$cand")"
+      log "[OK] Hazır çekirdek ağacı: $KERNEL_SRC"
+      return 0
+    fi
+  done
+  log "[INFO] Hazır çekirdek ağacı yok (build klasörü boş/bozuk). WSL kaynağı hazırlanacak."
+  if [[ "$NO_NETWORK" -eq 1 && ! -f "$WSL_SRC_DIR/Makefile" ]]; then
+    log "[ERROR] Kaynak yok ve --no-network açık."; return 1
   fi
-  # Prepare config and headers
-  if [[ -f "$KERNEL_SRC/Microsoft/config-wsl" && ! -f "$KERNEL_SRC/.config" ]]; then
+  KERNEL_SRC="$WSL_SRC_DIR"
+  if [[ ! -f "$KERNEL_SRC/Makefile" || "$(cat "$KERNEL_SRC/.built_for_kver" 2>/dev/null || true)" != "$KVER" ]]; then
+    local base tag branch
+    base="${KVER%%-*}"                       # 6.18.58.1
+    tag="linux-msft-wsl-$base"
+    branch="linux-msft-wsl-$(echo "$base" | cut -d. -f1,2).y"
+    _do rm -rf "$KERNEL_SRC"
+    _do git clone --depth 1 --branch "$tag" https://github.com/microsoft/WSL2-Linux-Kernel.git "$KERNEL_SRC" \
+      || _do git clone --depth 1 --branch "$branch" https://github.com/microsoft/WSL2-Linux-Kernel.git "$KERNEL_SRC" \
+      || _do git clone --depth 1 https://github.com/microsoft/WSL2-Linux-Kernel.git "$KERNEL_SRC"
+  else
+    log "[INFO] Mevcut kaynak kullanılıyor: $KERNEL_SRC"
+  fi
+  # Çalışan çekirdeğin gerçek config'i en doğrusu
+  if [[ -r /proc/config.gz ]]; then
+    _do bash -c "zcat /proc/config.gz > '$KERNEL_SRC/.config'"
+  elif [[ -f "$KERNEL_SRC/Microsoft/config-wsl" ]]; then
     _do cp "$KERNEL_SRC/Microsoft/config-wsl" "$KERNEL_SRC/.config"
   fi
-  (cd "$KERNEL_SRC" && _do make olddefconfig || true)
-  (cd "$KERNEL_SRC" && _do make -j"$(nproc)" modules_prepare || true)
-  # Best-effort ensure key dirs
-  _do mkdir -p "$KERNEL_SRC/include" "$KERNEL_SRC/scripts" "$KERNEL_SRC/include/generated"
-  log "[OK] Kernel source prepared at $KERNEL_SRC"
+  _do make -C "$KERNEL_SRC" olddefconfig || true
+  _do make -C "$KERNEL_SRC" -j"$(nproc)" modules_prepare
+  if [[ "$RUN_MODE" -eq 1 ]] && ! kernel_tree_ready "$KERNEL_SRC"; then
+    log "[ERROR] modules_prepare sonrası $KERNEL_SRC hazır değil."; return 1
+  fi
+  [[ "$RUN_MODE" -eq 1 ]] && echo "$KVER" >"$KERNEL_SRC/.built_for_kver"
+  # /usr/src/linux-headers-<ver> WSL'de çoğunlukla salt-okunur bağlama noktasıdır; dokunulamazsa
+  # sorun değil (DKMS --kernelsourcedir ile doğrudan $KERNEL_SRC'yi kullanır).
+  local hdr="/usr/src/linux-headers-$KVER"
+  if [[ ! -f "$hdr/Makefile" ]]; then
+    if mountpoint -q "$hdr" 2>/dev/null; then
+      log "[INFO] $hdr bir bağlama noktası; yönlendirme atlandı (gerekmiyor)."
+    else
+      if [[ -e "$hdr" && ! -L "$hdr" ]]; then _do mv "$hdr" "$hdr.empty.$START_TS" || log "[WARN] $hdr taşınamadı"; fi
+      _do ln -sfn "$KERNEL_SRC" "$hdr" || log "[WARN] $hdr sembolik bağı oluşturulamadı (önemli değil)"
+    fi
+  fi
+  log "[OK] Çekirdek kaynağı hazır: $KERNEL_SRC"
 }
 
-# Scan project for local driver sources, patches, dkms.conf, etc.
+# ---------------- Sürücü kaynağı ----------------
 SCAN_DRIVER_SRC=""
 PATCHES_FOUND=()
-DKMS_CONF_FOUND=()
 scan_project_tree() {
-  log "[INFO] Scanning project tree: $PROJECT_ROOT"
-  if command -v find >/dev/null 2>&1; then
-    # Prefer trees containing 8821cu and a Makefile
-    local drivers
-    mapfile -t drivers < <(find "$PROJECT_ROOT" -type d -iname "*8821cu*" -maxdepth 6 -print 2>/dev/null | sort -u)
-    for d in "${drivers[@]}"; do
-      if [[ -f "$d/Makefile" || -f "$d/makefile" ]]; then
-        SCAN_DRIVER_SRC="$d"
-        break
-      fi
-    done
-    mapfile -t PATCHES_FOUND < <(find "$PROJECT_ROOT" -type f \( -iname "*.diff" -o -iname "*.patch" -o -iname "patch_*" \) -print 2>/dev/null | sort -u)
-    mapfile -t DKMS_CONF_FOUND < <(find "$PROJECT_ROOT" -type f -iname "dkms.conf" -print 2>/dev/null | sort -u)
+  log "[INFO] Proje taranıyor: $PROJECT_ROOT"
+  local d
+  while read -r d; do
+    [[ -n "$d" ]] || continue
+    if [[ -f "$d/Makefile" ]]; then SCAN_DRIVER_SRC="$d"; break; fi
+  done < <(find "$PROJECT_ROOT" -maxdepth 6 -type d -iname "*8821cu*" -not -path "*/logs/*" 2>/dev/null | sort -u)
+  # Sadece kendi patches/ klasöründeki yamalar uygulanır (docs içindeki Android yamaları DEĞİL)
+  if [[ -d "$PROJECT_ROOT/patches" ]]; then
+    mapfile -t PATCHES_FOUND < <(find "$PROJECT_ROOT/patches" -type f \( -iname "*.patch" -o -iname "*.diff" \) 2>/dev/null | sort -u)
   fi
-  if [[ -n "$SCAN_DRIVER_SRC" ]]; then
-    log "[OK] Found local driver source: $SCAN_DRIVER_SRC"
-  else
-    log "[INFO] No local driver tree found; will clone if network allowed."
-  fi
-  if ((${#PATCHES_FOUND[@]})); then
-    log "[INFO] Patches detected (${#PATCHES_FOUND[@]}):"; printf ' - %s\n' "${PATCHES_FOUND[@]}" | tee -a "$LOG_FILE" >/dev/null
-  fi
-  if ((${#DKMS_CONF_FOUND[@]})); then
-    log "[INFO] dkms.conf found (${#DKMS_CONF_FOUND[@]}), will use as reference if needed."
-  fi
+  if [[ -n "$SCAN_DRIVER_SRC" ]]; then log "[OK] Yerel sürücü kaynağı: $SCAN_DRIVER_SRC"
+  else log "[INFO] Yerel sürücü kaynağı yok."; fi
 }
 
-# Obtain driver source (prefer local)
 DRIVER_SRC=""
 DRIVER_VERSION=""
 DKMS_SRC_DIR=""
@@ -256,337 +355,277 @@ get_driver_source() {
   if [[ -n "$SCAN_DRIVER_SRC" ]]; then
     DRIVER_SRC="$SCAN_DRIVER_SRC"
   else
-    if [[ "$NO_NETWORK" -eq 1 ]]; then
-      log "[ERROR] No local driver source and --no-network set."; exit 1
-    fi
-    local ts; ts="$(date +%Y%m%d_%H%M%S)"
-    DRIVER_SRC="/usr/src/8821cu-$ts"
-    _do git clone --depth 1 https://github.com/morrownr/8821cu-20210916 "$DRIVER_SRC"
-    # Save a reproducible copy under TARGET/vendor
+    if [[ "$NO_NETWORK" -eq 1 ]]; then log "[ERROR] Yerel kaynak yok ve --no-network açık."; return 1; fi
+    DRIVER_SRC="$TARGET_DIR/vendor/8821cu"
     _do mkdir -p "$TARGET_DIR/vendor"
-    _do rm -rf "$TARGET_DIR/vendor/8821cu" 2>/dev/null || true
-    _do cp -a "$DRIVER_SRC" "$TARGET_DIR/vendor/8821cu"
+    _do rm -rf "$DRIVER_SRC"
+    _do git clone --depth 1 https://github.com/morrownr/8821cu-20210916 "$DRIVER_SRC"
   fi
-  # Detect version
   if [[ -f "$DRIVER_SRC/dkms.conf" ]]; then
-    DRIVER_VERSION="$(grep -E '^\s*PACKAGE_VERSION\s*=\s*"?.*"?' "$DRIVER_SRC/dkms.conf" | head -n1 | sed -E 's/.*=\s*"?([^"\n]+)"?.*/\1/' || true)"
+    DRIVER_VERSION="$(sed -nE 's/^[[:space:]]*PACKAGE_VERSION[[:space:]]*=[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' "$DRIVER_SRC/dkms.conf" | head -n1 || true)"
   fi
-  if [[ -z "$DRIVER_VERSION" ]]; then
-    DRIVER_VERSION="5.13.1-WSL"
-  fi
+  [[ -n "$DRIVER_VERSION" && "$DRIVER_VERSION" != "@VERSION@" ]] || DRIVER_VERSION="5.12.0.4"
   DKMS_SRC_DIR="/usr/src/8821cu-$DRIVER_VERSION"
-  log "[OK] Driver source: $DRIVER_SRC (version: $DRIVER_VERSION)"
+  log "[OK] Sürücü kaynağı: $DRIVER_SRC (sürüm: $DRIVER_VERSION)"
 }
 
-# Apply local patches idempotently, record to TARGET/PATCHES_APPLIED
-apply_patches_if_any() {
-  local record="$TARGET_DIR/PATCHES_APPLIED"
-  if ((${#PATCHES_FOUND[@]}==0)); then
-    log "[INFO] No patches to apply."
-    return 0
+write_dkms_conf() {
+  local dir="$1" extra="${2:-}" content
+  content="$(cat <<'EOF_DKMS'
+PACKAGE_NAME="8821cu"
+PACKAGE_VERSION="@VERSION@"
+BUILT_MODULE_NAME[0]="8821cu"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+AUTOINSTALL="yes"
+MAKE[0]="'make' -j$(nproc) @EXTRA@ KVER=${kernelver} KSRC=${kernel_source_dir}"
+CLEAN="'make' clean"
+EOF_DKMS
+)"
+  content="${content//@VERSION@/$DRIVER_VERSION}"
+  content="${content//@EXTRA@/$extra}"
+  if [[ -f "$dir/dkms.conf" ]]; then _do cp "$dir/dkms.conf" "$dir/dkms.conf.bak.$(date +%Y%m%d_%H%M%S)"; fi
+  printf '%s\n' "$content" | write_file "$dir/dkms.conf" 0644
+  log "[OK] dkms.conf yazıldı (${extra:-ek bayrak yok})"
+}
+
+sync_to_dkms_tree() {
+  [[ -n "$DKMS_SRC_DIR" ]] || { log "[ERROR] DKMS_SRC_DIR boş"; return 1; }
+  if [[ -d "$DKMS_SRC_DIR" ]]; then
+    _do rm -rf "$DKMS_SRC_DIR.bak"
+    _do mv "$DKMS_SRC_DIR" "$DKMS_SRC_DIR.bak"
   fi
-  # Apply patches to DKMS source tree to avoid modifying original sources
-  local APPLY_DIR="${DKMS_SRC_DIR:-$DRIVER_SRC}"
+  _do mkdir -p "$DKMS_SRC_DIR"
+  _do cp -a "$DRIVER_SRC/." "$DKMS_SRC_DIR/"
+  write_dkms_conf "$DKMS_SRC_DIR" "KBUILD_MODPOST_WARN=1"
+}
+
+apply_patches_if_any() {
+  local record="$TARGET_DIR/PATCHES_APPLIED" p
+  if ((${#PATCHES_FOUND[@]}==0)); then log "[INFO] Uygulanacak yama yok."; return 0; fi
   for p in "${PATCHES_FOUND[@]}"; do
-    if grep -Fq "$p" "$record" 2>/dev/null; then
-      log "[INFO] Patch already recorded: $p"
-      continue
-    fi
-    if git -C "$APPLY_DIR" apply --check "$p" >/dev/null 2>&1; then
+    if grep -Fqx "$p" "$record" 2>/dev/null; then log "[INFO] Yama zaten uygulanmış: $p"; continue; fi
+    if git -C "$DKMS_SRC_DIR" apply --check "$p" >/dev/null 2>&1; then
       if [[ "$RUN_MODE" -eq 1 ]]; then
-        log "[PATCH] Applying $p to $APPLY_DIR"; git -C "$APPLY_DIR" apply "$p" && echo "$p" >>"$record"
+        log "[PATCH] $p"; git -C "$DKMS_SRC_DIR" apply "$p" && echo "$p" >>"$record"
       else
-        log "(dry-run) Would apply patch: $p to $APPLY_DIR"
+        log "(dry-run) yama uygulanır: $p"
       fi
     else
-      log "[WARN] Patch not applicable: $p"
+      log "[WARN] Yama uygulanamıyor: $p"
     fi
   done
 }
 
-# Ensure robust dkms.conf
-backup_and_write_dkms_conf() {
-  local target_dir="$1"
-  local dk="$target_dir/dkms.conf"
-  if [[ -f "$dk" ]]; then
-    local bak="$dk.bak.$(date +%Y%m%d_%H%M%S)"
-    _do cp "$dk" "$bak"
-  fi
-  # Write DKMS-safe config (literal heredoc, substitute version after)
-  local tmp="$LOG_DIR/dkms.conf.new"
-  cat >"$tmp" <<'EOF_DKMS'
-PACKAGE_NAME="8821cu"
-PACKAGE_VERSION="@VERSION@"
-CLEAN="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build clean"
-MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build"
-BUILT_MODULE_NAME[0]="8821cu"
-DEST_MODULE_LOCATION[0]="/updates/dkms"
-AUTOINSTALL="yes"
-EOF_DKMS
-  # Substitute version token
-  sed "s/@VERSION@/${DRIVER_VERSION}/g" "$tmp" >"$tmp.subst"
-  _do install -m 0644 "$tmp.subst" "$dk"
-  log "[OK] Wrote DKMS-safe dkms.conf into $target_dir"
-}
-
-# Create/update DKMS source tree under /usr/src/8821cu-<version>
-sync_to_dkms_tree() {
-  if [[ -z "$DKMS_SRC_DIR" ]]; then
-    log "[ERROR] DKMS_SRC_DIR is not set"; exit 1
-  fi
-  if [[ -d "$DKMS_SRC_DIR" ]]; then
-    log "[INFO] Updating existing DKMS source: $DKMS_SRC_DIR"
-    _do rm -rf "$DKMS_SRC_DIR".bak 2>/dev/null || true
-    _do cp -a "$DKMS_SRC_DIR" "$DKMS_SRC_DIR.bak" || true
-    _do rm -rf "$DKMS_SRC_DIR"
-  fi
-  _do mkdir -p "$DKMS_SRC_DIR"
-  _do cp -a "$DRIVER_SRC/." "$DKMS_SRC_DIR/"
-  backup_and_write_dkms_conf "$DKMS_SRC_DIR"
-}
-
-# DKMS workflow with auto-fix attempts
+# ---------------- DKMS ----------------
 DKMS_ATTEMPTS=0
 DKMS_MAKELOG=""
 run_dkms_cycle() {
   DKMS_ATTEMPTS=$((DKMS_ATTEMPTS+1))
-  log "[INFO] DKMS attempt #$DKMS_ATTEMPTS using KERNEL_SRC=$KERNEL_SRC"
-  # Remove mismatched entries if any
-  local st; st="$(dkms status 2>/dev/null || true)"
-  if echo "$st" | grep -q "8821cu, .*: added"; then
-    log "[INFO] dkms: stale 'added' entries present"
-  fi
-  if echo "$st" | grep -E "8821cu, " | grep -v "$DRIVER_VERSION" >/dev/null 2>&1; then
-    if [[ "$RUN_MODE" -eq 1 ]]; then
-      log "[INFO] Removing mismatched 8821cu versions from DKMS"
-      while read -r line; do
-        local ver; ver="$(echo "$line" | awk -F, '{print $2}' | awk '{print $1}')"
-        [[ -n "$ver" ]] && dkms remove -m 8821cu -v "$ver" --all || true
-      done < <(echo "$st" | grep -E "8821cu, ")
-    else
-      log "(dry-run) Would remove mismatched DKMS entries"
-    fi
-  fi
-  # Add
-  if [[ "$RUN_MODE" -eq 1 ]]; then
-    dkms add -m 8821cu -v "$DRIVER_VERSION" 2>/dev/null || true
-  else
-    log "(dry-run) dkms add -m 8821cu -v $DRIVER_VERSION"
-  fi
-  # Build
+  log "[INFO] DKMS denemesi #$DKMS_ATTEMPTS (KERNEL_SRC=$KERNEL_SRC)"
+  local v ec=0
+  while read -r v; do
+    [[ -n "$v" ]] && _do dkms remove -m 8821cu -v "$v" --all || true
+  done < <(dkms status 2>/dev/null | grep -E '^8821cu' | sed -E 's#^8821cu[/ ,]+([^,: ]+).*#\1#' | sort -u)
+
+  _do dkms add -m 8821cu -v "$DRIVER_VERSION" || true
+
   if [[ "$RUN_MODE" -eq 1 ]]; then
     set +e
-    dkms build -m 8821cu -v "$DRIVER_VERSION" --kernelsourcedir "$KERNEL_SRC" --verbose | tee -a "$LOG_FILE"
-    local ec=$?
+    dkms build -m 8821cu -v "$DRIVER_VERSION" -k "$KVER" --kernelsourcedir "$KERNEL_SRC" --verbose 2>&1 | tee -a "$LOG_FILE"
+    ec=${PIPESTATUS[0]}
     set -e
   else
-    log "(dry-run) dkms build -m 8821cu -v $DRIVER_VERSION --kernelsourcedir $KERNEL_SRC --verbose"
-    ec=0
+    log "(dry-run) dkms build -m 8821cu -v $DRIVER_VERSION -k $KVER --kernelsourcedir $KERNEL_SRC --verbose"
   fi
-  DKMS_MAKELOG="/var/lib/dkms/8821cu/$DRIVER_VERSION/build/make.log"
+  DKMS_MAKELOG="$(
+    find "/var/lib/dkms/8821cu/$DRIVER_VERSION" -type f -name make.log \
+      -printf '%T@ %p\\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true
+  )"
   if [[ $ec -ne 0 ]]; then
-    log "[ERROR] DKMS build failed (attempt $DKMS_ATTEMPTS)."
+    log "[ERROR] DKMS build başarısız (deneme $DKMS_ATTEMPTS). make.log: ${DKMS_MAKELOG:-yok}"
     return 1
   fi
-  # Install
   if [[ "$RUN_MODE" -eq 1 ]]; then
-    dkms install -m 8821cu -v "$DRIVER_VERSION" | tee -a "$LOG_FILE" || return 1
+    set +e
+    dkms install -m 8821cu -v "$DRIVER_VERSION" -k "$KVER" 2>&1 | tee -a "$LOG_FILE"
+    ec=${PIPESTATUS[0]}
+    set -e
+    [[ $ec -eq 0 ]] || { log "[ERROR] dkms install başarısız"; return 1; }
   else
-    log "(dry-run) dkms install -m 8821cu -v $DRIVER_VERSION"
+    log "(dry-run) dkms install -m 8821cu -v $DRIVER_VERSION -k $KVER"
   fi
   return 0
 }
 
 attempt_autofix() {
-  # Parse make.log for common issues
-  if [[ -f "$DKMS_MAKELOG" ]]; then
-    if grep -qi "Module.symvers" "$DKMS_MAKELOG" || grep -qi "modpost" "$DKMS_MAKELOG"; then
-      log "[AUTO-FIX] Trying to address Module.symvers/modpost issues"
-      if [[ -f "$KERNEL_SRC/Module.symvers" ]]; then
-        _do cp "$KERNEL_SRC/Module.symvers" "$DKMS_SRC_DIR/Module.symvers"
-      fi
-      (cd "$KERNEL_SRC" && _do make -j"$(nproc)" modules_prepare || true)
+  if [[ -n "$DKMS_MAKELOG" && -f "$DKMS_MAKELOG" ]]; then
+    if grep -qi "no makefile found" "$DKMS_MAKELOG"; then
+      log "[AUTO-FIX] Çekirdek ağacı boş; yeniden hazırlanıyor"
+      KERNEL_SRC=""; prepare_kernel_source || true
     fi
-    if grep -Eqi "KERNEL_SOURCE_DIR|PWD" "$DKMS_MAKELOG"; then
-      log "[AUTO-FIX] Detected bad variable expansion in dkms.conf; rewriting"
-      backup_and_write_dkms_conf "$DKMS_SRC_DIR"
+    if grep -Eqi "Module.symvers|modpost" "$DKMS_MAKELOG"; then
+      log "[AUTO-FIX] Module.symvers/modpost sorunu"
+      [[ -f "$KERNEL_SRC/Module.symvers" ]] && _do cp "$KERNEL_SRC/Module.symvers" "$DKMS_SRC_DIR/Module.symvers"
+      write_dkms_conf "$DKMS_SRC_DIR" "KBUILD_MODPOST_WARN=1"
+    fi
+    if grep -Eq "error:" "$DKMS_MAKELOG"; then
+      log "[NOTE] Derleme hataları var: eski sürücü kaynağı $KVER API'siyle uyumsuz olabilir. make.log: $DKMS_MAKELOG"
     fi
   else
-    log "[AUTO-FIX] make.log not found; applying generic prepare"
-    (cd "$KERNEL_SRC" && _do make -j"$(nproc)" modules_prepare || true)
+    log "[AUTO-FIX] make.log yok; genel hazırlık"
+    _do make -C "$KERNEL_SRC" -j"$(nproc)" modules_prepare || true
   fi
 }
 
 manual_build_fallback() {
-  log "[FALLBACK] Manual build path engaged"
-  _do make -C "$KERNEL_SRC" M="$DKMS_SRC_DIR"
+  log "[FALLBACK] Manuel derleme"
+  _do make -C "$KERNEL_SRC" M="$DKMS_SRC_DIR" KBUILD_MODPOST_WARN=1 modules
   local ko
   ko="$(find "$DKMS_SRC_DIR" -name '8821cu.ko' -type f 2>/dev/null | head -n1 || true)"
-  if [[ -z "$ko" ]]; then
-    log "[ERROR] Manual build did not produce 8821cu.ko"
-    return 1
+  if [[ "$RUN_MODE" -eq 1 && -z "$ko" ]]; then
+    log "[ERROR] Manuel derleme 8821cu.ko üretmedi"; return 1
   fi
-  _do mkdir -p "/lib/modules/$(uname -r)/extra"
-  _do cp "$ko" "/lib/modules/$(uname -r)/extra/"
+  _do mkdir -p "/lib/modules/$KVER/extra"
+  [[ -n "$ko" ]] && _do cp "$ko" "/lib/modules/$KVER/extra/"
   _do depmod -a
-  if [[ "$RUN_MODE" -eq 1 ]]; then
-    modprobe 8821cu || true
-  else
-    log "(dry-run) modprobe 8821cu"
-  fi
-  log "[FALLBACK] Manual build completed"
+  _do modprobe 8821cu || true
+  log "[FALLBACK] Manuel derleme bitti"
 }
 
+# ---------------- Kalıcılık ----------------
+ensure_wsl_systemd() {
+  local f=/etc/wsl.conf
+  if [[ -f "$f" ]] && grep -Eq '^[[:space:]]*systemd[[:space:]]*=[[:space:]]*true' "$f"; then
+    log "[OK] wsl.conf: systemd zaten açık"; return 0
+  fi
+  if [[ -f "$f" ]]; then _do cp "$f" "$f.bak.$START_TS"; fi
+  if [[ "$RUN_MODE" -ne 1 ]]; then log "(dry-run) wsl.conf [boot] systemd=true eklenecek"; return 0; fi
+  if [[ -f "$f" ]] && grep -Eq '^[[:space:]]*\[boot\]' "$f"; then
+    sed -i -E '/^[[:space:]]*\[boot\]/a systemd=true' "$f"
+  else
+    printf '\n[boot]\nsystemd=true\n' >>"$f"
+  fi
+  log "[OK] wsl.conf güncellendi (WSL'i 'wsl --shutdown' ile yeniden başlatın)"
+}
+
+setup_persistence() {
+  log "[PERSISTENCE] Otomatik yükleme ve hotplug ayarlanıyor"
+  _do depmod -a
+  printf '8821cu\n' | write_file /etc/modules-load.d/8821cu.conf 0644
+  # Çekirdek içi rtw88 sürücüsüyle çakışmayı önle
+  printf 'blacklist rtw88_8821cu\nblacklist rtw88_8821c\n' | write_file /etc/modprobe.d/blacklist-rtw88-8821cu.conf 0644
+  printf 'ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="%s", ATTR{idProduct}=="%s", RUN+="/sbin/modprobe 8821cu"\n' "$USB_VID" "$USB_PID" \
+    | write_file /etc/udev/rules.d/99-rtl8821cu.rules 0644
+  _do udevadm control --reload-rules || true
+  ensure_wsl_systemd
+  log "[PERSISTENCE] Tamam. Not: WSL çekirdeği güncellenirse scripti tekrar çalıştırın."
+}
+
+# ---------------- Doğrulama ----------------
 verify_system() {
-  log "[VERIFY] Collecting system info"
+  log "[VERIFY] Sistem bilgisi toplanıyor"
   {
     echo "===== modinfo 8821cu ====="; modinfo 8821cu 2>&1 || true
+    echo "===== modinfo rtw88_8821cu ====="; modinfo rtw88_8821cu 2>&1 | head -n 5 || true
+    echo "===== firmware ====="; ls -l /lib/firmware/rtw88/rtw8821c_fw.bin* 2>&1 || true
     echo "===== ip -br link ====="; ip -br link 2>&1 || true
     echo "===== iw dev ====="; iw dev 2>&1 || true
-    if command -v rfkill >/dev/null 2>&1; then
-      echo "===== rfkill list ====="; rfkill list 2>&1 || true
-    fi
-    if command -v airmon-ng >/dev/null 2>&1; then
-      echo "===== airmon-ng ====="; airmon-ng 2>&1 || true
-    else
-      echo "[NOTE] airmon-ng not installed"
-    fi
     echo "===== lsusb ====="; lsusb 2>&1 || true
-    echo "===== dmesg (tail) ====="; dmesg | tail -n 80 2>&1 || true
-  } | tee -a "$LOG_FILE"
-
-  # Quick success heuristic
-  if ip -br link 2>/dev/null | grep -Eiq "\b(wlan|wl|wifi)"; then
-    log "[SUCCESS] Wireless interface detected."
-  else
-    log "[WARN] Module may be loaded but no wireless interface visible. Check dmesg and USB passthrough."
-  fi
-  if [[ "$RUN_MODE" -eq 1 ]]; then
-    iface=$(ip -br link 2>/dev/null | awk '/^(wlan|wl|wifi)/{print $1, $2}' | awk '$2!="UP"{print $1; exit 0}')
-    if [[ -n "$iface" ]]; then
-      log "[INFO] Attempting to bring up interface $iface"
-      _do ip link set "$iface" up || true
+    echo "===== dmesg (bu çalışmada yeni rtw/usb kayıtları) ====="
+    if [[ -f "$DMESG_BASELINE_FILE" ]] && command -v diff >/dev/null 2>&1; then
+      dmesg --raw 2>/dev/null \
+        | diff -u "$DMESG_BASELINE_FILE" - \
+        | sed -n '/^+++ /d; /^+/{s/^+//;p;}' \
+        | grep -Ei 'rtw|8821|cfg80211|usb 1-' \
+        | tail -n 40 || true
+    else
+      echo "[WARN] dmesg başlangıç kaydı alınamadı; eski kernel mesajları ayıklanamadı."
     fi
+  } 2>&1 | tee -a "$LOG_FILE"
+
+  if has_wifi_iface; then
+    log "[SUCCESS] Kablosuz arayüz görünüyor."
+    local d iface
+    for d in /sys/class/net/*/wireless; do
+      iface="$(basename "$(dirname "$d")")"
+      _do ip link set "$iface" up || true
+    done
+  else
+    log "[WARN] Kablosuz arayüz yok. dmesg çıktısına ve USB passthrough durumuna bakın."
   fi
 }
 
-main() {
-  require_root
-  sanitize_env
-  log "[START] $SCRIPT_NAME at $START_TS | TARGET=$TARGET_DIR | RUN_MODE=$([[ $RUN_MODE -eq 1 ]] && echo run || echo dry-run) | AUTO_FIX=$AUTO_FIX | FORCE_MANUAL=$FORCE_MANUAL | NO_NETWORK=$NO_NETWORK"
-  log "[INFO] Logs: $LOG_FILE"
+summarize() {
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$TARGET_DIR/ai_helper.py" ]]; then
+    python3 -W ignore::DeprecationWarning "$TARGET_DIR/ai_helper.py" summarize "$LOG_FILE" 2>&1 | tee -a "$LOG_FILE" || true
+  else
+    log "[NOTE] ai_helper.py yok; özet atlandı."
+  fi
+}
 
-  scan_project_tree
+finish() {
+  if has_wifi_iface || module_loaded 8821cu; then log "DONE success"; else log "DONE failure"; fi
+}
+
+# ---------------- main ----------------
+main() {
+  sanitize_env
+  log "[START] $SCRIPT_NAME $START_TS | KVER=$KVER | MODE=$([[ $RUN_MODE -eq 1 ]] && echo run || echo dry-run) | AUTO_FIX=$AUTO_FIX | FORCE_MANUAL=$FORCE_MANUAL | FORCE_DKMS=$FORCE_DKMS | SKIP_FIRMWARE=$SKIP_FIRMWARE | NO_NETWORK=$NO_NETWORK"
+  log "[INFO] Log: $LOG_FILE"
+  [[ "$RUN_MODE" -eq 1 ]] || log "[INFO] DRY-RUN: hiçbir şey değişmez. Gerçek kurulum için --run ekleyin."
+
+  heal_dpkg
   ensure_apt_ready || true
-  prepare_kernel_source
-  get_driver_source
+
+  # --- Adım 1: firmware + çekirdek içi sürücü ---
+  if [[ "$SKIP_FIRMWARE" -eq 0 ]]; then
+    if ensure_firmware_path && [[ "$FORCE_DKMS" -eq 0 ]]; then
+      verify_system; finish; summarize; return 0
+    fi
+  fi
+
+  # --- Adım 2: DKMS ---
+  log "[STEP2] DKMS yolu"
+  scan_project_tree
+  prepare_kernel_source || { log "[ERROR] Çekirdek kaynağı hazırlanamadı."; verify_system; finish; summarize; return 0; }
+  get_driver_source || { verify_system; finish; summarize; return 0; }
   sync_to_dkms_tree
   apply_patches_if_any
 
   local success=0
   if run_dkms_cycle; then
     success=1
-  else
-    if [[ "$AUTO_FIX" -eq 1 ]]; then
+  elif [[ "$AUTO_FIX" -eq 1 ]]; then
+    attempt_autofix
+    if run_dkms_cycle; then
+      success=1
+    else
       attempt_autofix
-      if run_dkms_cycle; then
-        success=1
-      else
-        attempt_autofix
-        # As last try, relax modpost warnings by injecting into dkms.conf
-        local dk="$DKMS_SRC_DIR/dkms.conf"
-        if [[ -f "$dk" ]]; then
-          local tmp="$LOG_DIR/dkms.conf.relaxed"
-          sed 's#MAKE\[0\]=\"make #MAKE[0\]=\"make KBUILD_MODPOST_WARN=1 #' "$dk" >"$tmp" || true
-          _do install -m 0644 "$tmp" "$dk"
-          log "[AUTO-FIX] Set KBUILD_MODPOST_WARN=1 in dkms.conf"
-        fi
-        if run_dkms_cycle; then
-          success=1
-        fi
-      fi
+      write_dkms_conf "$DKMS_SRC_DIR" "KBUILD_MODPOST_WARN=1"
+      run_dkms_cycle && success=1 || true
     fi
   fi
 
   if [[ "$success" -ne 1 ]]; then
-    log "[ERROR] DKMS path failed."
+    log "[ERROR] DKMS yolu başarısız."
     if [[ "$FORCE_MANUAL" -eq 1 ]]; then
-      manual_build_fallback || true
+      manual_build_fallback && success=1 || true
     else
-      log "[INFO] Re-run with --run --auto-fix, or --run --force-manual for fallback build."
+      log "[INFO] --run --auto-fix veya --run --force-manual ile tekrar deneyin."
     fi
   fi
 
-  # --- PERSISTENCE SETUP (WSL reboot + autoload + hotplug) ---
-  if [[ "${success:-0}" -eq 1 ]]; then
-    log "[INFO] Running final depmod -a to refresh kernel module index."
-    _do depmod -a
-
-    log "[PERSISTENCE] Enabling module autoload, hotplug, and WSL autostart."
-
-    # 1️⃣ Kernel autoload (modules-load.d)
-    echo "8821cu" | _do tee /etc/modules-load.d/8821cu.conf > /dev/null
-
-    # 2️⃣ USB hotplug rule
-    USB_VID="0bda"
-    USB_PID="c811"
-    UDEV_RULE_FILE="/etc/udev/rules.d/99-rtl8821cu.rules"
-    echo "ACTION==\"add\", SUBSYSTEM==\"usb\", ATTR{idVendor}==\"$USB_VID\", ATTR{idProduct}==\"$USB_PID\", RUN+=\"/sbin/modprobe 8821cu\"" | \
-        _do tee "$UDEV_RULE_FILE" > /dev/null
-    _do udevadm control --reload-rules || true
-
-    # 3️⃣ WSL autoload (profile.d) — DKMS reinstall fallback
-    AUTOSCRIPT="/etc/profile.d/rtl8821cu_wsl_autoload.sh"
-    cat <<'EOF' | _do tee "$AUTOSCRIPT" > /dev/null
-#!/bin/bash
-# ============================================
-# RTL8821CU WSL2 Autoload & DKMS Reinstall Helper
-# ============================================
-# Bu betik WSL açılışında otomatik olarak çalışır.
-# Eğer 8821cu modülü yüklü değilse, DKMS üzerinden yeniden kurar.
-KVER="$(uname -r)"
-if ! lsmod | grep -q '^8821cu\b'; then
-  ver="$(ls -1 /usr/src | awk -F'-' '/^8821cu-/ {print $2}' | sort -V | tail -n1)"
-  if [[ -n "$ver" && -d "/usr/src/8821cu-$ver" ]]; then
-    echo "[Autoload] Reinstalling 8821cu module (DKMS $ver) for kernel ${KVER}..."
-    sudo dkms install -m 8821cu -v "$ver" --force >/dev/null 2>&1
-    sudo modprobe 8821cu 2>/dev/null || true
-    echo "[Autoload] 8821cu module reloaded successfully."
-  else
-    echo "[Autoload] No /usr/src/8821cu-<ver> found; skipping."
-  fi
-fi
-EOF
-    _do chmod +x "$AUTOSCRIPT"
-
-    # 4️⃣ WSL config (systemd autoload) — merge without overwriting
-    if [[ ! -f /etc/wsl.conf ]]; then
-      printf "[wsl2]\nsystemd=true\n[boot]\ncommand=/bin/true\n" | _do tee /etc/wsl.conf > /dev/null
-    else
-      _do cp /etc/wsl.conf /etc/wsl.conf.bak || true
-      grep -q '^\s*\[wsl2\]' /etc/wsl.conf || printf "\n[wsl2]\n" | _do tee -a /etc/wsl.conf > /dev/null
-      grep -q '^\s*systemd\s*=\s*true' /etc/wsl.conf || printf "systemd=true\n" | _do tee -a /etc/wsl.conf > /dev/null
-      grep -q '^\s*\[boot\]' /etc/wsl.conf || printf "\n[boot]\n" | _do tee -a /etc/wsl.conf > /dev/null
-      grep -q '^\s*command\s*=\s*/bin/true' /etc/wsl.conf || printf "command=/bin/true\n" | _do tee -a /etc/wsl.conf > /dev/null
-    fi
-
-    log "[PERSISTENCE] Persistence setup completed."
+  if [[ "$success" -eq 1 ]]; then
+    _do modprobe -r rtw88_8821cu 2>/dev/null || true
+    _do modprobe 8821cu || true
+    setup_persistence
+    reset_usb_dev || true
+    wait_for_wifi || true
   fi
 
   verify_system
-
-  # Summarize via ai_helper
-  if command -v python3 >/dev/null 2>&1 && [[ -f "$TARGET_DIR/ai_helper.py" ]]; then
-    python3 "$TARGET_DIR/ai_helper.py" summarize "$LOG_FILE" | tee -a "$LOG_FILE" || true
-  else
-    log "[NOTE] ai_helper.py not available; skipping summary."
-  fi
-
-  if lsmod | grep -q '^8821cu\b'; then
-    log "DONE success"
-  else
-    log "DONE failure"
-  fi
+  finish
+  summarize
 }
 
-main "$@"
+main
