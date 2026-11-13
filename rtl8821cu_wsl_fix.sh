@@ -108,8 +108,9 @@ ln -sfn "$LOG_DIR" "$LOG_BASE_DIR/latest" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/run.log"
 : >"$LOG_FILE"
 DMESG_BASELINE_FILE="$LOG_DIR/dmesg.before"
-if command -v dmesg >/dev/null 2>&1; then
-  dmesg --raw 2>/dev/null >"$DMESG_BASELINE_FILE" || true
+DMESG_BASELINE_OK=0
+if command -v dmesg >/dev/null 2>&1 && dmesg --raw >"$DMESG_BASELINE_FILE" 2>/dev/null; then
+  DMESG_BASELINE_OK=1
 fi
 export RTL8821CU_WSL_TARGET="$TARGET_DIR"
 
@@ -439,7 +440,7 @@ run_dkms_cycle() {
   fi
   DKMS_MAKELOG="$(
     find "/var/lib/dkms/8821cu/$DRIVER_VERSION" -type f -name make.log \
-      -printf '%T@ %p\\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true
+      -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true
   )"
   if [[ $ec -ne 0 ]]; then
     log "[ERROR] DKMS build başarısız (deneme $DKMS_ATTEMPTS). make.log: ${DKMS_MAKELOG:-yok}"
@@ -532,7 +533,7 @@ verify_system() {
     echo "===== iw dev ====="; iw dev 2>&1 || true
     echo "===== lsusb ====="; lsusb 2>&1 || true
     echo "===== dmesg (bu çalışmada yeni rtw/usb kayıtları) ====="
-    if [[ -f "$DMESG_BASELINE_FILE" ]] && command -v diff >/dev/null 2>&1; then
+    if [[ "$DMESG_BASELINE_OK" -eq 1 && -f "$DMESG_BASELINE_FILE" ]] && command -v diff >/dev/null 2>&1; then
       dmesg --raw 2>/dev/null \
         | diff -u "$DMESG_BASELINE_FILE" - \
         | sed -n '/^+++ /d; /^+/{s/^+//;p;}' \
